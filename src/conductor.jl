@@ -99,9 +99,8 @@ function serveclient(connection::Base.PipeEndpoint)
         # REVIEW: Should this get the Julia version from the worker?
         servestring("julia version $VERSION, juliaclient $PACKAGE_VERSION\n")
     else
-        local stdio_sock, signals_sock
+        stdio_sock, signals_sock = runclient(client)
         try
-            stdio_sock, signals_sock = runclient(client)
             println(connection, stdio_sock)
             println(connection, signals_sock)
         catch err
