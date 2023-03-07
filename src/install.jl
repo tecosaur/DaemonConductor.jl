@@ -32,5 +32,7 @@ function install()
     end
     binpath = XDG.User.bin(CLIENT_NAME)
     @info "Installing client binary to $binpath"
-    @warn "Client install is currently unimplemented (oops!)"
+    symlink(joinpath(artifact"client", "client"), binpath)
+    chmod(binpath, 0o555)
+    @info "Done"
 end

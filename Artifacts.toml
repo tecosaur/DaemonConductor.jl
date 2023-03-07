@@ -1,0 +1,8 @@
+[client]
+arch = "x86_64"
+os = "linux"
+git-tree-sha1 = "1af88cfe592538104459037eca355433a42c80e8"
+
+    [[client.download]]
+    url = "https://github.com/tecosaur/DaemonConductor.jl/releases/download/0.1.0/client.tar.gz"
+    sha256 = "07580e89a0ddd217fcf9b31e73694a2d6a79bd7cccb3d29324f58d05d08fdca0"
