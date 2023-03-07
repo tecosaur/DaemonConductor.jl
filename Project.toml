@@ -1,0 +1,14 @@
+name = "DaemonConductor"
+uuid = "17525775-44bb-48b7-b857-e2300d3b9f41"
+authors = ["TEC <git@tecosaur.net>"]
+version = "0.1.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+XDG = "cf316f05-2ad2-44c5-9b4f-65a35e6ed6f5"
+
+[compat]
+julia = "1.7"

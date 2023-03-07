@@ -1,0 +1,56 @@
+#+title: DaemonConductor
+
+Run a script many times, compile it once.
+
+=DaemonConductor= acts as drop-in replacement for a subset of =julia=.
+
+#+begin_example
+~$ juliaclient --help
+
+    juliaclient [switches] -- [programfile] [args...]
+
+Switches (a '*' marks the default value, if applicable):
+
+ -v, --version              Display version information
+ -h, --help                 Print this message
+ --project[=<dir>|@.]       Set <dir> as the home project/environment
+ -e, --eval <expr>          Evaluate <expr>
+ -E, --print <expr>         Evaluate <expr> and display the result
+ -L, --load <file>          Load <file> immediately on all processors
+ -i                         Interactive mode; REPL runs and `isinteractive()` is true
+ --banner={yes|no|auto*}    Enable or disable startup banner
+ --color={yes|no|auto*}     Enable or disable color text
+ --history-file={yes*|no}   Load or save history
+#+end_example
+
+Currently the client makes use of unix sockets and [[https://unixism.net/loti/what_is_io_uring.html][=io_uring=]], and so only works
+on Linux systems at the moment.
+
+* Usage
+
++ Install somewhere (potentially in a separate package environment)
++ Run =using DaemonConductor; DaemonConductor.install()=
++ Use =juliaclient= as a (mostly) drop-in replacement for =julia=
+
+* Configuration
+
+When the daemon starts, it pays attention to the following environmental variables:
++ =JULIA_DAEMON_SERVER= (default: =/run/user/$UID/julia-daemon.sock=), the socket
+  the client connects to.
++ =JULIA_DAEMON_WORKER_ARGS= (default: =--startup-file=no=), arguments passed to the
+  worker Julia processes (individual arguments are split on whitespace).
+
+Similarly, the client pays attention to =JULIA_DAEMON_SERVER= to make sure it
+connects to the right socket.
+
+* Caveats
+
++ A worker is started per-project, and so running the same thing in multiple
+  projects will incur the worker startup and compile cost multiple times.
++ Workers are currently kept alive forever, leading to ballooning memory usage.
+  This should be addressed in the future.
++ The REPL seems a little funky, and wasn't designed to allow for multiple REPLs
+  per Julia process.
++ Sometimes the socket file disappears, for mysterious reasons.
++ This is currently the result of a weekend of work, there are likely some minor
+  issues that haven't been shaken out yet.
