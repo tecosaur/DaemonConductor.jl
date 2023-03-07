@@ -1,5 +1,7 @@
 const WORKER_ARGUMENTS =
     split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
+const WORKER_JULIA =
+    get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", Sys.which("julia"))
 
 """
 Worker
@@ -32,7 +34,7 @@ Create a `Worker` using the project `project` (a path).
 function Worker(project)
     input = Base.PipeEndpoint()
     output = IOBuffer()
-    process = run(pipeline(`julia --project=$project $WORKER_ARGUMENTS`,
+    process = run(pipeline(`$WORKER_JULIA --project=$project $WORKER_ARGUMENTS`,
                            stdin=input, stdout=output, stderr=output),
                   wait=false)
     write(input, WORKER_INIT_CODE, '\n')

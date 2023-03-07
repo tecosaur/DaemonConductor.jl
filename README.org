@@ -39,6 +39,8 @@ When the daemon starts, it pays attention to the following environmental variabl
   the client connects to.
 + =JULIA_DAEMON_WORKER_ARGS= (default: =--startup-file=no=), arguments passed to the
   worker Julia processes (individual arguments are split on whitespace).
++ =JULIA_DAEMON_WORKER_EXECUTABLE= (default: =julia= on =PATH=), the path to the Julia
+  executable used by the workers.
 
 Similarly, the client pays attention to =JULIA_DAEMON_SERVER= to make sure it
 connects to the right socket.
