@@ -7,6 +7,9 @@ Description=Julia ($(@__MODULE__).jl) server daemon
 [Service]
 Type=simple
 ExecStart=$(Sys.which("julia")) --startup-file=no --project="$(dirname(@__DIR__))" -e "using $(@__MODULE__); $(@__MODULE__).start()"
+Environment="JULIA_DAEMON_SERVER=$MAIN_SOCKET"
+Environment="JULIA_DAEMON_WORKER_EXECUTABLE=$(Sys.which("julia"))"
+Environment="JULIA_DAEMON_WORKER_ARGS=$(join(WORKER_ARGUMENTS, ' '))"
 Restart=on-failure
 
 [Install]
