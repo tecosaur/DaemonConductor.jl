@@ -71,10 +71,10 @@ function Base.kill(worker::Worker)
 end
 
 """
-    run(worker::Worker, expr::Expr)
+    run(worker::Worker, expr::Union{Expr, Symbol})
 Run `expr` on `worker`, and return the result.
 """
-Base.run(worker::Worker, expr::Expr) =
+Base.run(worker::Worker, expr::Union{Expr, Symbol}) =
     lock(worker) do
         serialize(worker.connection, (:eval, expr))
         deserialize(worker.connection)
