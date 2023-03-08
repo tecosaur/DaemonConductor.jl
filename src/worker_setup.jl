@@ -44,10 +44,27 @@ REPL.Terminals.raw!(t::REPL.TTYTerminal, raw::Bool) = raw
 # Client evaluation
 
 function prepare_module(client::NamedTuple)
-    mod = Module()
+    mod = Module(:Main)
+    # MainInclude (taken from base/client.jl)
+    maininclude = quote
+        baremodule MainInclude
+        using ..Base
+        include(mapexpr::Function, fname::AbstractString) = Base._include(mapexpr, $mod, fname)
+        function include(fname::AbstractString)
+            isa(fname, String) || (fname = Base.convert(String, fname)::String)
+            Base._include(identity, $mod, fname)
+        end
+        eval(x) = Core.eval($mod, x)
+        end
+        import .MainInclude: eval, include
+    end
+    maininclude.head = :toplevel # Module must be in a :toplevel Expr.
+    Core.eval(mod, maininclude)
+    # Exit
     Core.eval(mod, :(struct SystemExit <: Exception code::Int end))
     Core.eval(mod, :(exit() = throw(SystemExit(0))))
     Core.eval(mod, :(exit(n) = throw(SystemExit(n))))
+    # State
     Core.eval(mod, :(cd($client.cwd)))
     if !isempty(client.args)
         Core.eval(mod, :(ARGS = $(client.args)))
