@@ -1,7 +1,7 @@
 name = "DaemonConductor"
 uuid = "17525775-44bb-48b7-b857-e2300d3b9f41"
 authors = ["TEC <git@tecosaur.net>"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
