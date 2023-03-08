@@ -72,76 +72,35 @@ function prepare_module(client::NamedTuple)
     mod
 end
 
+function getval(pairlist, key, default)
+    index = findfirst(p -> first(p) == key, pairlist)
+    if isnothing(index) default else last(pairlist[index]) end
+end
+
 # Basically a bootleg version of `exec_options`.
 function runclient(client::NamedTuple, stdio, signals)
-    function getval(pairlist, key, default)
-        index = findfirst(p -> first(p) == key, pairlist)
-        if isnothing(index) default else last(pairlist[index]) end
-    end
     signal_exit(n) = write(signals, "\x01exit\x02", string(n), "\x04")
 
     lock(STATE.lock) do
         push!(STATE.clients, (time(), client))
     end
 
-    runrepl = client.tty && ("-i" ∈ client.switches ||
-        (isnothing(client.programfile) && "--eval" ∉ first.(client.switches) &&
-        "--print" ∉ first.(client.switches)))
     hascolor = getval(client.switches, "--color",
                         ifelse(startswith(getval(client.env, "TERM", ""),
                                         "xterm"),
                                 "yes", "")) == "yes"
     stdiox = IOContext(stdio, :color => hascolor)
+    mod = prepare_module(client)
 
     try
         withenv(client.env...) do
             redirect_stdio(stdin=stdiox, stdout=stdiox, stderr=stdiox) do
-                mod = prepare_module(client)
-                for (switch, value) in client.switches
-                    if switch == "--eval"
-                        Core.eval(mod, Base.parse_input_line(value))
-                    elseif switch == "--print"
-                        res = Core.eval(mod, Base.parse_input_line(value))
-                        Base.invokelatest(show, res)
-                        println()
-                    elseif switch == "--load"
-                        Base.include(mod, value)
-                    end
-                end
-                if !isnothing(client.programfile)
-                    try
-                        if client.programfile == "-"
-                            Base.include_string(mod, read(stdin, String), "stdin")
-                        else
-                            Base.include(mod, client.programfile)
-                        end
-                    catch
-                        Core.eval(mod, quote
-                                        Base.invokelatest(
-                                            Base.display_error,
-                                            Base.scrub_repl_backtrace(
-                                                current_exceptions()))
-                                        if !$(runrepl)
-                                            exit(1)
-                                        end
-                                    end)
-                    end
-                end
-                if runrepl
-                    quiet = "-q" in first.(client.switches) || "--quiet" in first.(client.switches)
-                    banner = getval(client.switches, "--banner", "yes") != "no"
-                    histfile = getval(client.switches, "--history-file", "yes") != "no"
-                    Core.eval(mod, quote
-                                    Core.eval(Base, $(:(have_color = $hascolor)))
-                                    Base.run_main_repl(true, $quiet, $banner, $histfile, $hascolor)
-                                end)
-                end
-                signal_exit(0)
+                run_client(mod, client; signal_exit)
             end
         end
     catch err
         etype = typeof(err)
-        if nameof(etype) == :SystemExit && parentmodule(etype) == m
+        if nameof(etype) == :SystemExit && parentmodule(etype) == mod
             signal_exit(err.code)
         elseif isopen(stdio)
             # TODO trim the stacktrace
@@ -163,6 +122,53 @@ function runclient(client::NamedTuple, stdio, signals)
         end
     end
     queue_ttl_check()
+end
+
+function run_client(mod::Module, client::NamedTuple; signal_exit::Function)
+    runrepl = client.tty && ("-i" ∈ client.switches ||
+        (isnothing(client.programfile) && "--eval" ∉ first.(client.switches) &&
+        "--print" ∉ first.(client.switches)))
+    for (switch, value) in client.switches
+        if switch == "--eval"
+            Core.eval(mod, Base.parse_input_line(value))
+        elseif switch == "--print"
+            res = Core.eval(mod, Base.parse_input_line(value))
+            Base.invokelatest(show, res)
+            println()
+        elseif switch == "--load"
+            Base.include(mod, value)
+        end
+    end
+    if !isnothing(client.programfile)
+        try
+            if client.programfile == "-"
+                Base.include_string(mod, read(stdin, String), "stdin")
+            else
+                Base.include(mod, client.programfile)
+            end
+        catch
+            Core.eval(mod, quote
+                          Base.invokelatest(
+                              Base.display_error,
+                              Base.scrub_repl_backtrace(
+                                  current_exceptions()))
+                          if !$(runrepl)
+                              exit(1)
+                          end
+                      end)
+        end
+    end
+    if runrepl
+        hascolor = get(stdout, :color, false)
+        quiet = "-q" in first.(client.switches) || "--quiet" in first.(client.switches)
+        banner = getval(client.switches, "--banner", "yes") != "no"
+        histfile = getval(client.switches, "--history-file", "yes") != "no"
+        Core.eval(mod, quote
+                        Core.eval(Base, $(:(have_color = $hascolor)))
+                        Base.run_main_repl(true, $quiet, $banner, $histfile, $hascolor)
+                    end)
+    end
+    signal_exit(0)
 end
 
 # Worker management
