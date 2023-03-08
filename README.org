@@ -41,6 +41,9 @@ When the daemon starts, it pays attention to the following environmental variabl
   worker Julia processes (individual arguments are split on whitespace).
 + =JULIA_DAEMON_WORKER_EXECUTABLE= (default: =julia= on =PATH=), the path to the Julia
   executable used by the workers.
++ =JULIA_DAEMON_WORKER_TTL= (default: =7200=, 2h), the number of seconds a worker
+  should be kept alive for after the last client disconnects from it. This
+  variable can be updated within the worker itself.
 
 Similarly, the client pays attention to =JULIA_DAEMON_SERVER= to make sure it
 connects to the right socket.

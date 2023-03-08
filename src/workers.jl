@@ -96,10 +96,28 @@ WORKER_INIT_CODE = quote # TODO make const
         using Revise
     end
 
-    const CTIME = time()
+    const STATE = (
+        ctime = time(),
+        clients = Vector{Tuple{Float64, NamedTuple}}(),
+        lastclient = Ref(time()),
+        lock = SpinLock(),
+        soft_exit = Ref(false))
 
-    const BASE_OPTIONS = NamedTuple{fieldnames(Base.JLOptions)}(
-        ((getfield(Base.JLOptions(), name) for name in fieldnames(Base.JLOptions))...,))
+    # TTL checking
+
+    function queue_ttl_check()
+        ttl = parse(Int, get(ENV, "JULIA_DAEMON_WORKER_TTL", "0"))
+        if ttl > 0
+            Timer(perform_ttl_check, ttl)
+        end
+    end
+
+    function perform_ttl_check(::Timer)
+        ttl = parse(Int, get(ENV, "JULIA_DAEMON_WORKER_TTL", "0"))
+        if ttl > 0 && time() - lock(() -> STATE.lastclient[], STATE.lock) < ttl
+            exit(0)
+        end
+    end
 
     # * Set up REPL-related overrides
     # Within `REPL`, `check_open` is called on our `stdout` IOContext,
@@ -124,8 +142,6 @@ WORKER_INIT_CODE = quote # TODO make const
         mod
     end
 
-    const CLIENTS = Vector{Tuple{NamedTuple, Task}}()
-
     # Basically a bootleg version of `exec_options`.
     function runclient(client::NamedTuple, stdio, signals)
         function getval(pairlist, key, default)
@@ -133,6 +149,11 @@ WORKER_INIT_CODE = quote # TODO make const
             if isnothing(index) default else last(pairlist[index]) end
         end
         signal_exit(n) = write(signals, "\x01exit\x02", string(n), "\x04")
+
+        lock(STATE.lock) do
+            push!(STATE.clients, (time(), client))
+        end
+
         runrepl = client.tty && ("-i" ∈ client.switches ||
             (isnothing(client.programfile) && "--eval" ∉ first.(client.switches) &&
             "--print" ∉ first.(client.switches)))
@@ -141,6 +162,7 @@ WORKER_INIT_CODE = quote # TODO make const
                                             "xterm"),
                                  "yes", "")) == "yes"
         stdiox = IOContext(stdio, :color => hascolor)
+
         try
             withenv(client.env...) do
                 redirect_stdio(stdin=stdiox, stdout=stdiox, stderr=stdiox) do
@@ -202,6 +224,15 @@ WORKER_INIT_CODE = quote # TODO make const
             end
             close(stdio)
         end
+        lock(STATE.lock) do
+            client_index = findfirst(e -> last(e) === client, STATE.clients)::Int
+            deleteat!(STATE.clients, client_index)
+            STATE.lastclient[] = time()
+            if STATE.soft_exit[]
+                exit(0)
+            end
+        end
+        queue_ttl_check()
     end
 
     # Worker management
@@ -232,7 +263,15 @@ WORKER_INIT_CODE = quote # TODO make const
                 !isnothing(signals) &&
                     Threads.@spawn runclient(msg, stdio, signals)
             elseif signal == :eval
-                serialize(conn, Base.eval(msg))
+                serialize(conn, Core.eval(@__MODULE__, msg))
+            elseif signal == :softexit # Exit when all clients complete
+                lock(STATE.lock) do
+                    if isempty(STATE.clients)
+                        exit(0)
+                    else
+                        STATE.soft_exit[] = true
+                    end
+                end
             else
                 println(conn, "Unknown signal: $signal")
             end
