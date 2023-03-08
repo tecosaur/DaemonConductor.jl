@@ -188,7 +188,8 @@ WORKER_INIT_CODE = quote # TODO make const
                 end
             end
         catch err
-            if nameof(typeof(err)) == :SystemExit
+            etype = typeof(err)
+            if nameof(etype) == :SystemExit && parentmodule(etype) == m
                 signal_exit(err.code)
             elseif isopen(stdio)
                 # TODO trim the stacktrace
