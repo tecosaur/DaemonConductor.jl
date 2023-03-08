@@ -1,7 +1,6 @@
-const WORKER_ARGUMENTS =
-    split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
-const WORKER_JULIA =
-    get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", Sys.which("julia"))
+julia_env() =
+    [key => value for (key, value) in ENV
+         if startswith(key, "JULIA_")]
 
 """
 Worker
@@ -27,6 +26,16 @@ struct Worker
 end
 
 """
+    worker_command(project)
+Create a `Cmd` that can serve as a worker process for `project`.
+"""
+function worker_command(project)
+    cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
+    args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
+    Cmd(`$cmd --project=$project $args`, env=julia_env())
+end
+
+"""
     Worker(project)
 
 Create a `Worker` using the project `project` (a path).
@@ -34,7 +43,7 @@ Create a `Worker` using the project `project` (a path).
 function Worker(project)
     input = Base.PipeEndpoint()
     output = IOBuffer()
-    process = run(pipeline(`$WORKER_JULIA --project=$project $WORKER_ARGUMENTS`,
+    process = run(pipeline(worker_command(project),
                            stdin=input, stdout=output, stderr=output),
                   wait=false)
     write(input, WORKER_INIT_CODE, '\n')
