@@ -1,4 +1,5 @@
 // Written for Zig 0.10.1
+// Compile with: zig build-exe -target x86_64-linux -fstrip -O ReleaseSmall -fsingle-threaded -fPIE client.zig
 const std = @import("std");
 
 const argcodes = .{
