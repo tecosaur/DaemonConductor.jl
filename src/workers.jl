@@ -80,6 +80,11 @@ Base.run(worker::Worker, expr::Union{Expr, Symbol}) =
         deserialize(worker.connection)
     end
 
+# TODO Find a better way to do this, ideally one
+# that reduces the compile time. Is it possible
+# to precompile a script file? Perhaps a single
+# worker with an 'unset' project could be pre-emptively
+# started, is this possible?
 """
 A string of Julia code which configures a new Julia process
 to function as a worker.
