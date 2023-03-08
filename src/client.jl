@@ -131,7 +131,7 @@ function projectpath(client::Client)
                 parent = joinpath(projectfile_path |> dirname |> dirname,
                                   "Project.toml")
                 if parent == projectfile_path
-                    projectfile_path = Pkg.project().path
+                    projectfile_path = Base.load_path_expand("@v#.#")
                 end
             end
             projectfile_path |> dirname
@@ -139,6 +139,6 @@ function projectpath(client::Client)
             abspath(client.cwd, project_path)
         end
     else
-        Pkg.project().path |> dirname
+        Base.load_path_expand("@v#.#") |> dirname
     end
 end
