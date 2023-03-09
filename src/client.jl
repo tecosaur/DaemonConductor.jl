@@ -122,7 +122,7 @@ Obtain the project path specified in `client`, returning the default
 project path if unspecified.
 """
 function projectpath(client::Client)
-    project_index = findfirst(==("--project"), Iterators.map(first, client.switches))
+    project_index = findlast(==("--project"), Iterators.map(first, client.switches))
     project_path = get(ENV, "JULIA_PROJECT", Base.load_path_expand("@v#.#") |> dirname)
     if !isnothing(project_index) && project_index < length(client.switches)
         project_path = last(client.switches[project_index])
