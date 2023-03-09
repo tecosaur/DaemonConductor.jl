@@ -3,18 +3,18 @@ const MAIN_SOCKET =
 
 function start()
     try
-        println("Running")
+        @log "Running"
         while true
             serveonce()
         end
     finally # Cleanup
-        println("Killing $(length(WORKER_POOL)) workers")
+        @log "Killing $(length(WORKER_POOL)) workers"
         for (key, _) in WORKER_POOL
             # These /need/ to be deleted and killed to avoid
             # potential pipe issues should `start()` be reinvoked.
             delete!(WORKER_POOL, key)
         end
-        println("Stopped")
+        @log "Stopped"
         file = if startswith(MAIN_SOCKET, '/') # Absolute socket file
             MAIN_SOCKET
         elseif startswith(MAIN_SOCKET, '~') # User-local socket file
@@ -73,8 +73,8 @@ end
 const client_counter = Ref(0)
 function serveclient(connection::Base.PipeEndpoint)
     client = readclientinfo(connection)
-    println("[$(now())] Client $(client_counter[] += 1); " *
-        "pid: $(client.pid) project: $(projectpath(client))")
+    @log "Client $(client_counter[] += 1); " *
+        "pid: $(client.pid) project: $(projectpath(client))"
     function servestring(content)
         # Setup sockets
         stdio_sockfile = BaseDirs.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
