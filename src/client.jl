@@ -123,22 +123,22 @@ project path if unspecified.
 """
 function projectpath(client::Client)
     project_index = findfirst(==("--project"), Iterators.map(first, client.switches))
+    project_path = get(ENV, "JULIA_PROJECT", Base.load_path_expand("@v#.#") |> dirname)
     if !isnothing(project_index) && project_index < length(client.switches)
         project_path = last(client.switches[project_index])
-        if project_path == "@."
-            projectfile_path = joinpath(client.cwd, "Project.toml")
-            while !ispath(projectfile_path)
-                parent = joinpath(projectfile_path |> dirname |> dirname,
-                                  "Project.toml")
-                if parent == projectfile_path
-                    projectfile_path = Base.load_path_expand("@v#.#")
-                end
-            end
-            projectfile_path |> dirname
-        else
-            abspath(client.cwd, project_path)
-        end
-    else
-        Base.load_path_expand("@v#.#") |> dirname
     end
+    if project_path == "@."
+        projectfile_path = joinpath(client.cwd, "Project.toml")
+        while !ispath(projectfile_path)
+            parent = joinpath(projectfile_path |> dirname |> dirname,
+                                "Project.toml")
+            if parent == projectfile_path
+                projectfile_path = Base.load_path_expand("@v#.#")
+            end
+        end
+        projectfile_path |> dirname
+    else
+        abspath(client.cwd, project_path)
+    end
+    project_path
 end
