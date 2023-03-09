@@ -1,5 +1,5 @@
 const MAIN_SOCKET =
-    get(ENV, "JULIA_DAEMON_SERVER", XDG.User.runtime("julia-daemon.sock"))
+    get(ENV, "JULIA_DAEMON_SERVER", BaseDirs.User.runtime("julia-daemon.sock"))
 
 function start()
     try
@@ -77,8 +77,8 @@ function serveclient(connection::Base.PipeEndpoint)
         "pid: $(client.pid) project: $(projectpath(client))")
     function servestring(content)
         # Setup sockets
-        stdio_sockfile = XDG.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
-        signals_sockfile = XDG.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
+        stdio_sockfile = BaseDirs.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
+        signals_sockfile = BaseDirs.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
         stdio_sock = Sockets.listen(stdio_sockfile)
         signals_sock = Sockets.listen(signals_sockfile)
         # Inform client about them

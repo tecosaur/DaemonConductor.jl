@@ -8,7 +8,7 @@ const DEFAULT_WORKER_TTL = 2*60*60 # 2h
     # Use a function instead of a const so that this will correctly
     # adapt to environment changes that affect the config path.
     systemd_service_file_path() =
-        XDG.User.config("systemd", "user", SYSTEMD_SERVICE_NAME * ".service",
+        BaseDirs.User.config("systemd", "user", SYSTEMD_SERVICE_NAME * ".service",
                         create=true)
 
     function systemd_service_file_content()
@@ -41,7 +41,7 @@ WantedBy=default.target
 Setup the daemon and client on this machine.
 
 More specifically this:
-- Symlinks the client executable to `$(XDG.User.bin(CLIENT_NAME))`
+- Symlinks the client executable to `$(BaseDirs.User.bin(CLIENT_NAME))`
 - Creates a Systemd service called `$SYSTEMD_SERVICE_NAME`, and starts it (when applicable)\n
   Note that the current `JULIA_*` environment variables will be 'baked in' to the service file."
 """
@@ -61,7 +61,7 @@ More specifically this:
             run(`systemctl --user enable --now $SYSTEMD_SERVICE_NAME.service`)
             @info "Started the daemon"
         end
-        binpath = XDG.User.bin(CLIENT_NAME)
+        binpath = BaseDirs.User.bin(CLIENT_NAME)
         @info "Installing client binary to $binpath"
         ispath(binpath) && rm(binpath)
         symlink(joinpath(artifact"client", "client"), binpath)
@@ -77,7 +77,7 @@ More specifically this:
             rm(systemd_service_file_path())
             run(`systemctl --user daemon-reload`)
         end
-        binpath = XDG.User.bin(CLIENT_NAME)
+        binpath = BaseDirs.User.bin(CLIENT_NAME)
         @info "Removing binary client $binpath"
         ispath(binpath) && rm(binpath)
         @info "Done"

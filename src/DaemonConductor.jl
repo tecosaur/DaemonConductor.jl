@@ -1,6 +1,6 @@
 module DaemonConductor
 
-using XDG
+using BaseDirs
 using Sockets
 using Base.Threads
 using Dates

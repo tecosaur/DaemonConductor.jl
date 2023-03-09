@@ -48,7 +48,7 @@ function Worker(project)
                   wait=false)
     write(input, WORKER_INIT_CODE, '\n')
     socketpath =
-        XDG.User.runtime(string("julia--worker-", String(rand('a':'z', 6)), ".sock"))
+        BaseDirs.User.runtime(string("julia--worker-", String(rand('a':'z', 6)), ".sock"))
     server = Sockets.listen(socketpath)
     write(input, :(runworker($socketpath)) |> string, '\n')
     connection = accept(server)
