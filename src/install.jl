@@ -24,7 +24,7 @@ Environment="JULIA_DAEMON_SERVER=$MAIN_SOCKET"
 Environment="JULIA_DAEMON_WORKER_EXECUTABLE=$(first(worker_cmd.exec))"
 Environment="JULIA_DAEMON_WORKER_ARGS=$(join(worker_cmd.exec[3:end], ' '))"
 $(if !haskey(ENV, "JULIA_DAEMON_WORKER_TTL")
-    "Environment=\"JULIA_DAEMON_WORKER_TTL=DEFAULT_WORKER_TTL\"\n"
+    "Environment=\"JULIA_DAEMON_WORKER_TTL=$DEFAULT_WORKER_TTL\"\n"
 else "" end)\
 $(map(julia_env()) do (key, val)
     string("Environment=\"", key, '=', val, '"', '\n')
