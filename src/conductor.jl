@@ -4,6 +4,7 @@ const MAIN_SOCKET =
 function start()
     try
         @log "Running"
+        @async create_reserve_worker()
         while true
             serveonce()
         end
@@ -13,6 +14,10 @@ function start()
             # These /need/ to be deleted and killed to avoid
             # potential pipe issues should `start()` be reinvoked.
             delete!(WORKER_POOL, key)
+        end
+        if !isnothing(RESERVE_WORKER[])
+            kill(RESERVE_WORKER[])
+            RESERVE_WORKER[] = nothing
         end
         @log "Stopped"
         file = if startswith(MAIN_SOCKET, '/') # Absolute socket file

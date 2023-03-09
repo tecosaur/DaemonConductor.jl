@@ -26,19 +26,36 @@ struct Worker
 end
 
 """
-    worker_command(project)
+    worker_command(project::AbstractString)
 Create a `Cmd` that can serve as a worker process for `project`.
 """
-function worker_command(project)
+function worker_command(project::AbstractString)
     cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
     args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
     Cmd(`$cmd --project=$project $args`, env=julia_env())
 end
 
 """
+    worker_command(nothing)
+Create a `Cmd` that serves as a project-less worker process.
+"""
+function worker_command(::Nothing)
+    cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
+    args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
+    env = julia_env() |> Dict
+    no_project_default_load_path =
+        join(("@v#.#", "@stdlib"), (@static if Sys.iswindows() ';' else ':' end))
+    env["JULIA_LOAD_PATH"] = if haskey(env, "JULIA_LOAD_PATH")
+        replace(env["JULIA_LOAD_PATH"], r"^:|:$" => no_project_default_load_path)
+    else no_project_default_load_path end
+    Cmd(`$cmd $args`; env)
+end
+
+"""
     Worker(project)
 
-Create a `Worker` using the project `project` (a path).
+Create a `Worker` using the project `project`, where `project` is a
+valid argument for `worker_command`.
 """
 function Worker(project)
     input = Base.PipeEndpoint()
@@ -91,27 +108,85 @@ to function as a worker.
 """
 const WORKER_INIT_CODE = read(joinpath(@__DIR__, "worker_setup.jl"), String)
 
+# Reserve worker
+
+"""
+An uninitialised worker, that can be easily repurposed for a particular project.
+"""
+const RESERVE_WORKER = Ref{Union{Worker, Nothing}}(nothing)
+
+"""
+    dummyclient(w::Worker)
+Simulate a client connecting to `w` to execute `nothing`, then disconnecting.
+"""
+function dummyclient(worker::Worker)
+    noclient = Client(false, 0, @__DIR__, Pair{String, String}[],
+                      [("-e", "nothing")], nothing, String[])
+    stdio_sock, signals_sock = runclient(worker, noclient)
+    stdio = Sockets.connect(stdio_sock)
+    signals = Sockets.connect(signals_sock)
+    sleep(0.01)
+    close(stdio); close(signals)
+end
+
+"""
+    create_reserve_worker()
+When `RESERVE_WORKER[]` is `nothing`, create an uninitialised worker
+and do a dry-run with `dummyclient` to compile the client-execution path,
+and set `RESERVE_WORKER[]` to this new worker.
+"""
+function create_reserve_worker()
+    @log "Creating reserve worker"
+    if isnothing(RESERVE_WORKER[])
+        w = Worker(nothing)
+        dummyclient(w)
+        RESERVE_WORKER[] = w
+        @log "Reserve worker initialised"
+    end
+end
+
 # The Worker Pool
 
 struct WorkerPool
     workers::Dict{String, Worker}
 end
 
-Base.haskey(wp::WorkerPool, key::AbstractString) =
-    haskey(wp.workers, key)
-Base.getindex(wp::WorkerPool, key::AbstractString) =
-    getindex(wp.workers, key)
-Base.setindex!(wp::WorkerPool, worker::Worker, key::AbstractString) =
-    setindex!(wp.workers, worker, key)
-Base.keys(wp::WorkerPool) = keys(wp.workers)
-Base.values(wp::WorkerPool) = values(wp.workers)
-Base.length(wp::WorkerPool) = length(wp.workers)
-Base.iterate(wp::WorkerPool) = iterate(wp.workers)
-Base.iterate(wp::WorkerPool, index::Int) = iterate(wp.workers, index)
-function Base.delete!(wp::WorkerPool, key::AbstractString)
-    worker = wp[key]
+Base.haskey(pool::WorkerPool, key::AbstractString) =
+    haskey(pool.workers, key)
+Base.keys(pool::WorkerPool) = keys(pool.workers)
+Base.values(pool::WorkerPool) = values(pool.workers)
+Base.length(pool::WorkerPool) = length(pool.workers)
+Base.iterate(pool::WorkerPool) = iterate(pool.workers)
+Base.iterate(pool::WorkerPool, index::Int) = iterate(pool.workers, index)
+function Base.delete!(pool::WorkerPool, project::AbstractString)
+    worker = pool.workers[project]
     kill(worker)
-    delete!(wp.workers, key)
+    delete!(pool.workers, project)
+end
+
+function Base.getindex(pool::WorkerPool, project::AbstractString)
+    if haskey(pool.workers, project) && process_exited(pool.workers[project].process)
+        @log "Worker for $project has died"
+        close(pool.workers[project].socket)
+        delete!(pool.workers, project)
+    end
+    if haskey(pool.workers, project)
+        pool.workers[project]
+    elseif !isnothing(RESERVE_WORKER[])
+        @log "Using reserve worker"
+        worker = RESERVE_WORKER[]
+        pool.workers[project] = worker
+        RESERVE_WORKER[] = nothing
+        lock(worker) do
+            run(worker, :(push!(LOAD_PATH, "@"); Base.set_active_project($project)))
+        end
+        @async create_reserve_worker()
+        worker
+    else
+        worker = Worker(project)
+        pool.workers[project] = worker
+        worker
+    end
 end
 
 """
@@ -144,15 +219,5 @@ end
 Find or create an appropriate worker to run `client` in,
 and call `runclient(worker, client)`.
 """
-function runclient(client::Client)
-    project = projectpath(client)
-    if haskey(WORKER_POOL, project) && process_exited(WORKER_POOL[project].process)
-        @info "Worker for $project has died"
-        delete!(WORKER_POOL, project)
-    end
-    if !haskey(WORKER_POOL, project)
-        @info "Creating new worker for $project"
-        WORKER_POOL[project] = Worker(project)
-    end
-    runclient(WORKER_POOL[project], client)
-end
+runclient(client::Client) =
+    runclient(WORKER_POOL[projectpath(client)], client)
