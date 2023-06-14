@@ -124,12 +124,11 @@ project path if unspecified.
 function projectpath(client::Client)
     project_index = findlast(==("--project"), Iterators.map(first, client.switches))
     project_path = let proj_env_index = findfirst(==("JULIA_PROJECT"), Iterators.map(first, client.env))
-        abspath(client.cwd,
-                if isnothing(proj_env_index)
-                    get(ENV, "JULIA_PROJECT", Base.load_path_expand("@v#.#") |> dirname)
-                else
-                    last(client.env[proj_env_index])
-                end)
+        if isnothing(proj_env_index)
+            get(ENV, "JULIA_PROJECT", Base.load_path_expand("@v#.#") |> dirname)
+        else
+            last(client.env[proj_env_index])
+        end
     end
     if !isnothing(project_index) && project_index < length(client.switches)
         project_path = last(client.switches[project_index])
@@ -141,11 +140,12 @@ function projectpath(client::Client)
                                 "Project.toml")
             if parent == projectfile_path
                 projectfile_path = Base.load_path_expand("@v#.#")
+            else
+                projectfile_path = parent
             end
         end
         projectfile_path |> dirname
     else
         abspath(client.cwd, project_path)
     end
-    project_path
 end
