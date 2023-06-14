@@ -90,7 +90,7 @@ const client_counter = Ref(0)
 function serveclient(connection::Base.PipeEndpoint)
     client = readclientinfo(connection)
     @log "Client $(client_counter[] += 1); " *
-        "pid: $(client.pid) project: $(projectpath(client))"
+        "pid: $(client.pid), project: $(projectpath(client))"
     function servestring(content)
         # Setup sockets
         rand_id = String(rand('a':'z', 16))
