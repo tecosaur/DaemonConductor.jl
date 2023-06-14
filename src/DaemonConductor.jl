@@ -7,8 +7,11 @@ using Dates
 using Pkg
 using Serialization
 
-const PACKAGE_VERSION = # Replace with `pkgversion` with Julia 1.9.
+const PACKAGE_VERSION = @static if VERSION >= v"1.9"
+    pkgversion(@__MODULE__)
+else
     VersionNumber(Pkg.TOML.parsefile(joinpath(pkgdir(@__MODULE__), "Project.toml"))["version"])
+end
 
 macro log(msg...)
     quote
