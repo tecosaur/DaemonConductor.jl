@@ -1,8 +1,11 @@
 const MAIN_SOCKET =
-    get(ENV, "JULIA_DAEMON_SERVER", BaseDirs.User.runtime("julia-daemon.sock"))
+    get(ENV, "JULIA_DAEMON_SERVER",
+        BaseDirs.User.runtime(RUNTIME_DIR, "conductor.sock"))
 
 function start()
     try
+        @log "Preparing worker environment"
+        ensure_worker_env()
         @log "Running"
         @async create_reserve_worker()
         while true
@@ -25,7 +28,13 @@ function start()
         elseif startswith(MAIN_SOCKET, '~') # User-local socket file
             expanduser(MAIN_SOCKET)
         end
-        !isnothing(file) && ispath(file) && rm(file)
+        if !isnothing(file) && ispath(file)
+            if startswith(file, BaseDirs.User.runtime(RUNTIME_DIR))
+                rm(BaseDirs.User.runtime(RUNTIME_DIR), recursive=true)
+            else
+                rm(file)
+            end
+        end
     end
 end
 
@@ -37,6 +46,7 @@ function serveonce()
     end
 
     server = if !isnothing(file)
+        isdir(dirname(file)) || mkpath(dirname(file))
         Sockets.listen(file)
     elseif match(r"^(?:localhost)?:\d+$", MAIN_SOCKET) |> !isnothing # Port only
         _, port = split(MAIN_SOCKET, ':')
@@ -69,6 +79,7 @@ function serveonce()
     catch err
         if err isa Base.IOError
             @warn "Client disconnected during setup"
+        # elseif err isa InterruptException
         else
             rethrow(err)
         end
@@ -82,8 +93,9 @@ function serveclient(connection::Base.PipeEndpoint)
         "pid: $(client.pid) project: $(projectpath(client))"
     function servestring(content)
         # Setup sockets
-        stdio_sockfile = BaseDirs.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
-        signals_sockfile = BaseDirs.User.runtime(string("julia-", String(rand('a':'z', 16)), ".sock"))
+        rand_id = String(rand('a':'z', 16))
+        stdio_sockfile = BaseDirs.User.runtime(RUNTIME_DIR, string(rand_id, "-stdio", ".sock"))
+        signals_sockfile = BaseDirs.User.runtime(RUNTIME_DIR, string(rand_id, "-signals", ".sock"))
         stdio_sock = Sockets.listen(stdio_sockfile)
         signals_sock = Sockets.listen(signals_sockfile)
         # Inform client about them

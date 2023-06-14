@@ -68,7 +68,7 @@ fn register_signal_handler() !void {
 
 fn get_main_socket(allocator: std.mem.Allocator, env_map: std.process.EnvMap) !std.net.Stream {
     const default_main_socket_path = try std.fmt.allocPrint(
-        allocator, "/run/user/{d}/julia-daemon.sock",
+        allocator, "/run/user/{d}/julia-daemon/conductor.sock",
         .{ std.os.linux.getuid() });
 
     const main_socket_path = env_map.get("JULIA_DAEMON_SERVER")

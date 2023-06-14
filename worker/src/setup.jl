@@ -1,20 +1,21 @@
-using Sockets
-using Serialization
-using Base.Threads
-using REPL
-
-# Use Revise.jl if possible
-const revise_pkg = Base.PkgId(Base.UUID("295af30f-e4ad-537b-8983-00126c2a3abe"), "Revise")
-if !isnothing(Base.locate_package(revise_pkg))
-    using Revise
-end
-
 const STATE = (
     ctime = time(),
     clients = Vector{Tuple{Float64, NamedTuple}}(),
+    project = Ref(""),
     lastclient = Ref(time()),
     lock = SpinLock(),
     soft_exit = Ref(false))
+
+# Revise
+
+const REVISE_PKG =
+    Base.PkgId(Base.UUID("295af30f-e4ad-537b-8983-00126c2a3abe"), "Revise")
+
+function try_load_revise()
+    if !isnothing(Base.locate_package(REVISE_PKG))
+        Core.eval(Main, :(using Revise))
+    end
+end
 
 # TTL checking
 
@@ -78,7 +79,7 @@ function getval(pairlist, key, default)
 end
 
 # Basically a bootleg version of `exec_options`.
-function runclient(client::NamedTuple, stdio, signals)
+function runclient(client::NamedTuple, stdio::Base.PipeEndpoint, signals::Base.PipeEndpoint)
     signal_exit(n) = write(signals, "\x01exit\x02", string(n), "\x04")
 
     lock(STATE.lock) do
@@ -95,7 +96,7 @@ function runclient(client::NamedTuple, stdio, signals)
     try
         withenv(client.env...) do
             redirect_stdio(stdin=stdiox, stdout=stdiox, stderr=stdiox) do
-                run_client(mod, client; signal_exit)
+                runclient(mod, client; signal_exit)
             end
         end
     catch err
@@ -112,19 +113,20 @@ function runclient(client::NamedTuple, stdio, signals)
             signal_exit(1)
         end
         close(stdio)
-    end
-    lock(STATE.lock) do
-        client_index = findfirst(e -> last(e) === client, STATE.clients)::Int
-        deleteat!(STATE.clients, client_index)
-        STATE.lastclient[] = time()
-        if STATE.soft_exit[]
-            exit(0)
+    finally
+        lock(STATE.lock) do
+            client_index = findfirst(e -> last(e) === client, STATE.clients)::Int
+            deleteat!(STATE.clients, client_index)
+            STATE.lastclient[] = time()
+            if STATE.soft_exit[]
+                exit(0)
+            end
         end
+        queue_ttl_check()
     end
-    queue_ttl_check()
 end
 
-function run_client(mod::Module, client::NamedTuple; signal_exit::Function)
+function runclient(mod::Module, client::NamedTuple; signal_exit::Function)
     runrepl = client.tty && ("-i" ∈ client.switches ||
         (isnothing(client.programfile) && "--eval" ∉ first.(client.switches) &&
         "--print" ∉ first.(client.switches)))
@@ -171,12 +173,24 @@ function run_client(mod::Module, client::NamedTuple; signal_exit::Function)
     signal_exit(0)
 end
 
+# Copied from `init_active_project()` in `base/initdefs.jl`.
+function set_project(project)
+    Base.set_active_project(
+        project === nothing ? nothing :
+        project == "" ? nothing :
+        startswith(project, "@") ? load_path_expand(project) :
+        abspath(expanduser(project)))
+end
+
 # Worker management
 
-function newconnection(oldconn, n::Int=1)
+function newconnection(oldconn::Base.PipeEndpoint, n::Int=1)
     try
         map(1:n) do _
-            path = joinpath("/run/user/1000", string("julia--", String(rand('a':'z', 16)), ".sock"))
+            sockfile = string("worker-", WORKER_ID[], '-',
+                              String(rand('a':'z', 8)), ".sock")
+            path = BaseDirs.User.runtime("julia-daemon", sockfile)
+            @info "Sock" path BaseDirs.RUNTIME_DIR[]
             server = Sockets.listen(path)
             serialize(oldconn, (:socket, path))
             server
@@ -191,7 +205,7 @@ function newconnection(oldconn, n::Int=1)
     end
 end
 
-function runworker(socketpath)
+function runworker(socketpath::String)
     conn = Sockets.connect(socketpath)
     while ((signal, msg) = deserialize(conn)) |> !isnothing
         if signal == :client

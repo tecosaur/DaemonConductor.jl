@@ -13,6 +13,8 @@ else
     VersionNumber(Pkg.TOML.parsefile(joinpath(pkgdir(@__MODULE__), "Project.toml"))["version"])
 end
 
+const RUNTIME_DIR = "julia-daemon"
+
 macro log(msg...)
     quote
         printstyled("[$(now())] ", color=:light_black)
@@ -36,7 +38,7 @@ Re-run this command after updating `DaemonConductor` and/or Julia itself.
 # Configuration
 
 When the daemon starts, it pays attention to the following environmental variables:
-- `JULIA_DAEMON_SERVER` [`$(BaseDirs.User.runtime("julia-daemon.sock"))`] \n
+- `JULIA_DAEMON_SERVER` [`$(BaseDirs.User.runtime("julia-daemon", "conductor.sock"))`] \n
   The socket to connect to
 - `JULIA_DAEMON_WORKER_ARGS` [`--startup-file=no`] \n
   Arguments passed to the Julia worker processes

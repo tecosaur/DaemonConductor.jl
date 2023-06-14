@@ -21,6 +21,20 @@ struct Worker
     lock::ReentrantLock
 end
 
+const WORKER_ENV = BaseDirs.User.cache(string(
+    "julia-daemon-", replace(string(PACKAGE_VERSION), '.' => '-'), "-worker-env"))
+const WORKER_PKGDIR = joinpath(dirname(@__DIR__), "worker")
+
+function ensure_worker_env()
+    if !isdir(WORKER_ENV)
+        mkpath(WORKER_ENV)
+    end
+    jlcmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
+    action = :(Pkg.develop(path=$WORKER_PKGDIR))
+    success(`$jlcmd --startup-file=no --project=$WORKER_ENV -e "using Pkg; $action"`) ||
+        error("Failed to set up worker environment")
+end
+
 """
     julia_env()
 Return a `Vector{Pair{String, String}}` of all `JULIA_*` env vars.
@@ -31,29 +45,14 @@ function julia_env()
 end
 
 """
-    worker_command(project::AbstractString)
-Create a `Cmd` that can serve as a worker process for `project`.
+    worker_command(socketpath::AbstractString)
+Create a `Cmd` that can serve as a worker process that communicates on `socketpath`.
 """
-function worker_command(project::AbstractString)
+function worker_command(socketpath::AbstractString)
     cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
     args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
-    Cmd(`$cmd --project=$project $args`, env=julia_env())
-end
-
-"""
-    worker_command(nothing)
-Create a `Cmd` that serves as a project-less worker process.
-"""
-function worker_command(::Nothing)
-    cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
-    args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
-    env = julia_env() |> Dict
-    no_project_default_load_path =
-        join(("@v#.#", "@stdlib"), (@static if Sys.iswindows() ';' else ':' end))
-    env["JULIA_LOAD_PATH"] = if haskey(env, "JULIA_LOAD_PATH")
-        replace(env["JULIA_LOAD_PATH"], r"^:|:$" => no_project_default_load_path)
-    else no_project_default_load_path end
-    Cmd(`$cmd $args`; env)
+    action = :(DaemonWorker.runworker($socketpath))
+    Cmd(`$cmd --project=$WORKER_ENV $args --eval "using DaemonWorker; $action"`, env=julia_env())
 end
 
 """
@@ -62,20 +61,21 @@ end
 Create a `Worker` using the project `project`, where `project` is a
 valid argument for `worker_command`.
 """
-function Worker(project)
+function Worker(project::Union{String, Nothing}=nothing)
+    socketpath =
+        BaseDirs.User.runtime(RUNTIME_DIR, string("wsetup-", String(rand('a':'z', 6)), ".sock"))
+    isdir(dirname(socketpath)) || mkpath(dirname(socketpath))
+    server = Sockets.listen(socketpath)
     input = Base.PipeEndpoint()
     output = IOBuffer()
-    process = run(pipeline(worker_command(project),
+    process = run(pipeline(worker_command(socketpath),
                            stdin=input, stdout=output, stderr=output),
                   wait=false)
-    write(input, WORKER_INIT_CODE, '\n')
-    socketpath =
-        BaseDirs.User.runtime(string("julia--worker-", String(rand('a':'z', 6)), ".sock"))
-    server = Sockets.listen(socketpath)
-    write(input, :(runworker($socketpath)) |> string, '\n')
     connection = accept(server)
     rm(socketpath) # No longer needed once the connection is active.
-    Worker(now(), process, server, connection, output, ReentrantLock())
+    worker = Worker(now(), process, server, connection, output, ReentrantLock())
+    # run(worker, :(set_project($project)))
+    worker
 end
 
 Base.lock(w::Worker) = lock(w.lock)
@@ -96,22 +96,12 @@ end
     run(worker::Worker, expr::Union{Expr, Symbol})
 Run `expr` on `worker`, and return the result.
 """
-Base.run(worker::Worker, expr::Union{Expr, Symbol}) =
+function Base.run(worker::Worker, expr::Union{Expr, Symbol})
     lock(worker) do
         serialize(worker.connection, (:eval, expr))
         deserialize(worker.connection)
     end
-
-# TODO Find a better way to do this, ideally one
-# that reduces the compile time. Is it possible
-# to precompile a script file? Perhaps a single
-# worker with an 'unset' project could be pre-emptively
-# started, is this possible?
-"""
-A string of Julia code which configures a new Julia process
-to function as a worker.
-"""
-const WORKER_INIT_CODE = read(joinpath(@__DIR__, "worker_setup.jl"), String)
+end
 
 # Reserve worker
 
@@ -183,7 +173,7 @@ function Base.getindex(pool::WorkerPool, project::AbstractString)
         pool.workers[project] = worker
         RESERVE_WORKER[] = nothing
         lock(worker) do
-            run(worker, :(push!(LOAD_PATH, "@"); Base.set_active_project($project)))
+            run(worker, :(set_project($project)))
         end
         @async create_reserve_worker()
         worker
