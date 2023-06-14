@@ -74,7 +74,7 @@ function Worker(project::Union{String, Nothing}=nothing)
     connection = accept(server)
     rm(socketpath) # No longer needed once the connection is active.
     worker = Worker(now(), process, server, connection, output, ReentrantLock())
-    # run(worker, :(set_project($project)))
+    run(worker, :(set_project($project)))
     worker
 end
 

@@ -79,7 +79,7 @@ function serveonce()
     catch err
         if err isa Base.IOError
             @warn "Client disconnected during setup"
-        # elseif err isa InterruptException
+        elseif err isa InterruptException
         else
             rethrow(err)
         end
