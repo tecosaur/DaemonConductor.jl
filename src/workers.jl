@@ -1,7 +1,3 @@
-julia_env() =
-    [key => value for (key, value) in ENV
-         if startswith(key, "JULIA_")]
-
 """
 Worker
 
@@ -23,6 +19,15 @@ struct Worker
     connection::Base.PipeEndpoint
     output::IOBuffer
     lock::ReentrantLock
+end
+
+"""
+    julia_env()
+Return a `Vector{Pair{String, String}}` of all `JULIA_*` env vars.
+"""
+function julia_env()
+    [key => value for (key, value) in ENV
+         if startswith(key, "JULIA_")]
 end
 
 """
