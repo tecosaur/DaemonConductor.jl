@@ -13,6 +13,7 @@ end
 ```
 """
 struct Worker
+    id::Int
     ctime::DateTime
     process::Base.Process
     socket::Sockets.PipeServer
@@ -55,6 +56,8 @@ function worker_command(socketpath::AbstractString)
     Cmd(`$cmd --project=$WORKER_ENV $args --eval "using DaemonWorker; $action"`, env=julia_env())
 end
 
+const WORKER_COUNT = Ref(0)
+
 """
     Worker(project)
 
@@ -73,7 +76,9 @@ function Worker(project::Union{String, Nothing}=nothing)
                   wait=false)
     connection = accept(server)
     rm(socketpath) # No longer needed once the connection is active.
-    worker = Worker(now(), process, server, connection, output, ReentrantLock())
+    worker = Worker((WORKER_COUNT[] += 1), now(),
+                    process, server, connection, output,
+                    ReentrantLock())
     run(worker, :(set_project($project)))
     worker
 end
@@ -136,7 +141,7 @@ function create_reserve_worker()
         w = Worker(nothing)
         dummyclient(w)
         RESERVE_WORKER[] = w
-        @log "Reserve worker initialised"
+        @log "Reserve worker#$(w.id) initialised"
     end
 end
 
