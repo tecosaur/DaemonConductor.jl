@@ -148,34 +148,53 @@ end
 # The Worker Pool
 
 struct WorkerPool
-    workers::Dict{String, Worker}
+    workers::Dict{String, Vector{Worker}}
 end
 
 Base.haskey(pool::WorkerPool, key::AbstractString) =
     haskey(pool.workers, key)
 Base.keys(pool::WorkerPool) = keys(pool.workers)
-Base.values(pool::WorkerPool) = values(pool.workers)
+Base.values(pool::WorkerPool) = collect(values(pool.workers) |> Iterators.flatten)
 Base.length(pool::WorkerPool) = length(pool.workers)
 Base.iterate(pool::WorkerPool) = iterate(pool.workers)
 Base.iterate(pool::WorkerPool, index::Int) = iterate(pool.workers, index)
 function Base.delete!(pool::WorkerPool, project::AbstractString)
-    worker = pool.workers[project]
-    kill(worker)
+    kill.(pool.workers[project])
     delete!(pool.workers, project)
 end
 
 function Base.getindex(pool::WorkerPool, project::AbstractString)
-    if haskey(pool.workers, project) && process_exited(pool.workers[project].process)
-        @log "Worker for $project has died"
-        close(pool.workers[project].socket)
-        delete!(pool.workers, project)
+    if haskey(pool.workers, project)
+        for worker in pool.workers[project]
+            if process_exited(worker.process)
+                @log "Worker#$(worker.id) for $project has died"
+            end
+        end
+        filter!(w -> !process_exited(w.process), pool.workers[project])
+        if isempty(pool.workers[project])
+            @log "All workers for $project have died"
+            delete!(pool.workers, project)
+        end
     end
     if haskey(pool.workers, project)
-        pool.workers[project]
-    elseif !isnothing(RESERVE_WORKER[])
-        @log "Using reserve worker"
+        if WORKER_MAXCLIENTS[] == 0 && !isempty(pool.workers[project])
+            return first(pool.workers[project])
+        end
+        for worker in pool.workers[project]
+            nclients = run(worker, :(length(STATE.clients)))
+            nclients = run(worker, :(length(STATE.clients)))
+            if nclients < WORKER_MAXCLIENTS[]
+                return worker
+            end
+        end
+        @log "All $(length(pool.workers[project])) workers have the maximum number of clients"
+    else
+        pool.workers[project] = Worker[]
+    end
+    if !isnothing(RESERVE_WORKER[])
         worker = RESERVE_WORKER[]
-        pool.workers[project] = worker
+        @log "Using reserve worker#$(worker.id) for $project"
+        push!(pool.workers[project], worker)
         RESERVE_WORKER[] = nothing
         lock(worker) do
             run(worker, :(set_project($project)))
@@ -184,7 +203,8 @@ function Base.getindex(pool::WorkerPool, project::AbstractString)
         worker
     else
         worker = Worker(project)
-        pool.workers[project] = worker
+        push!(pool.workers[project], worker)
+        @log "Created new worker#$(worker.id) for $project"
         worker
     end
 end

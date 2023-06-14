@@ -1,6 +1,7 @@
 using Pkg.Artifacts
 
 const DEFAULT_WORKER_TTL = 2*60*60 # 2h
+const DEFAULT_WORKER_MAXCLIENTS = 1
 
 @static if Sys.islinux()
     const SYSTEMD_SERVICE_NAME = "julia-daemon"
@@ -22,6 +23,9 @@ Type=simple
 ExecStart=$(first(worker_cmd.exec)) --startup-file=no --project="$(dirname(@__DIR__))" -e "using $(@__MODULE__); $(@__MODULE__).start()"
 Environment="JULIA_DAEMON_SERVER=$MAIN_SOCKET"
 Environment="JULIA_DAEMON_WORKER_EXECUTABLE=$(first(worker_cmd.exec))"
+$(if !haskey(ENV, "JULIA_DAEMON_WORKER_MAXCLIENTS")
+    "Environment=\"JULIA_DAEMON_WORKER_MAXCLIENTS=$DEFAULT_WORKER_MAXCLIENTS\"\n"
+else "" end)\
 Environment="JULIA_DAEMON_WORKER_ARGS=$(join(worker_cmd.exec[3:end-2], ' '))"
 $(if !haskey(ENV, "JULIA_DAEMON_WORKER_TTL")
     "Environment=\"JULIA_DAEMON_WORKER_TTL=$DEFAULT_WORKER_TTL\"\n"

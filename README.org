@@ -39,6 +39,8 @@ When the daemon starts, it pays attention to the following environmental variabl
   the client connects to.
 + =JULIA_DAEMON_WORKER_ARGS= (default: =--startup-file=no=), arguments passed to the
   worker Julia processes (individual arguments are split on whitespace).
++ =JULIA_DAEMON_WORKER_MAXCLIENTS= (default: =1=), the maximum number of clients a
+  worker may be attached to at once. Set to =0= to disable.
 + =JULIA_DAEMON_WORKER_EXECUTABLE= (default: =julia= on =PATH=), the path to the Julia
   executable used by the workers.
 + =JULIA_DAEMON_WORKER_TTL= (default: =7200=, 2h), the number of seconds a worker
