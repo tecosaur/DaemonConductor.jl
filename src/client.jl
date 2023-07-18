@@ -130,14 +130,14 @@ function projectpath(client::Client)
             last(client.env[proj_env_index])
         end
     end
-    if !isnothing(project_index) && project_index < length(client.switches)
+    if !isnothing(project_index) && project_index <= length(client.switches)
         project_path = last(client.switches[project_index])
     end
-    if project_path == "@."
+    if project_path ∈ ("@.", "")
         projectfile_path = joinpath(client.cwd, "Project.toml")
         while !ispath(projectfile_path)
             parent = joinpath(projectfile_path |> dirname |> dirname,
-                                "Project.toml")
+                              "Project.toml")
             if parent == projectfile_path
                 projectfile_path = Base.load_path_expand("@v#.#")
             else
@@ -146,6 +146,6 @@ function projectpath(client::Client)
         end
         projectfile_path |> dirname
     else
-        abspath(client.cwd, project_path)
+        rstrip(abspath(client.cwd, expanduser(project_path)), '/')
     end
 end
