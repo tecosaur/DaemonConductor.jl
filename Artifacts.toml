@@ -1,8 +1,8 @@
 [client]
 arch = "x86_64"
 os = "linux"
-git-tree-sha1 = "9f9296c182e410d6378baa50b484e7105e8d3d26"
+git-tree-sha1 = "b0621f678662f9a4d5f8323bb46a63a3e34cc59d"
 
     [[client.download]]
-    url = "https://github.com/tecosaur/DaemonConductor.jl/releases/download/0.2.0/client.tar.gz"
-    sha256 = "cf24b34e8d68e7cea25eb6875c8567e3a3465897a75cf27cb67053b3f06ccbcf"
+    url = "https://github.com/tecosaur/DaemonConductor.jl/releases/download/0.3.0/client.tar.gz"
+    sha256 = "36f348b25a80d2a02e6bfbe96475e544af20f925b2e3747143c7de0a69d7ae64"
