@@ -37,10 +37,6 @@ end
 # Within `REPL`, `check_open` is called on our `stdout` IOContext,
 # and we need to add this method to make it work.
 # Core.eval(mod, :(Base.check_open(ioc::IOContext) = Base.check_open(ioc.io)))
-# With `REPL.Terminals.raw!`, there are to invocations incompatable
-# with an `IOContext`: `check_open` and `.handle`. However, `raw!` isn't
-# able to work normally anyway, so we may as well override it.
-REPL.Terminals.raw!(t::REPL.TTYTerminal, raw::Bool) = raw
 
 # Client evaluation
 
