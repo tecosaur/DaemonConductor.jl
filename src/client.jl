@@ -146,6 +146,6 @@ function projectpath(client::Client)
         end
         projectfile_path |> dirname
     else
-        rstrip(abspath(client.cwd, expanduser(project_path)), '/')
+        rstrip(abspath(client.cwd, expanduser(project_path)), '/') |> String
     end
 end
