@@ -157,13 +157,15 @@ function runclient(mod::Module, client::NamedTuple; signal_exit::Function)
         end
     end
     if runrepl
+        interactiveinput = runrepl && client.tty
         hascolor = get(stdout, :color, false)
         quiet = "-q" in first.(client.switches) || "--quiet" in first.(client.switches)
-        banner = getval(client.switches, "--banner", "yes") != "no"
+        banner = getval(client.switches, "--banner",
+                        ifelse(interactiveinput, "yes", "no")) != "no"
         histfile = getval(client.switches, "--history-file", "yes") != "no"
         Core.eval(mod, quote
                         Core.eval(Base, $(:(have_color = $hascolor)))
-                        Base.run_main_repl(true, $quiet, $banner, $histfile, $hascolor)
+                        Base.run_main_repl($interactiveinput, $quiet, $banner, $histfile, $hascolor)
                     end)
     end
     signal_exit(0)
