@@ -92,7 +92,7 @@ function runclient(client::NamedTuple, stdio::Base.PipeEndpoint, signals::Base.P
     try
         withenv(client.env...) do
             redirect_stdio(stdin=stdiox, stdout=stdiox, stderr=stdiox) do
-                runclient(mod, client; signal_exit)
+                runclient(mod, client; signal_exit, stdout=stdiox)
             end
         end
     catch err
@@ -122,16 +122,16 @@ function runclient(client::NamedTuple, stdio::Base.PipeEndpoint, signals::Base.P
     end
 end
 
-function runclient(mod::Module, client::NamedTuple; signal_exit::Function)
-    runrepl = client.tty && ("-i" ∈ client.switches ||
+function runclient(mod::Module, client::NamedTuple; signal_exit::Function, stdout::IO=stdout)
+    runrepl = "-i" ∈ client.switches ||
         (isnothing(client.programfile) && "--eval" ∉ first.(client.switches) &&
-        "--print" ∉ first.(client.switches)))
+         "--print" ∉ first.(client.switches))
     for (switch, value) in client.switches
         if switch == "--eval"
             Core.eval(mod, Base.parse_input_line(value))
         elseif switch == "--print"
             res = Core.eval(mod, Base.parse_input_line(value))
-            Base.invokelatest(show, res)
+            Base.invokelatest(show, stdout, res)
             println()
         elseif switch == "--load"
             Base.include(mod, value)
