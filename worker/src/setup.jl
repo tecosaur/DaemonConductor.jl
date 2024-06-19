@@ -162,6 +162,9 @@ function runclient(mod::Module, client::NamedTuple; signal_exit::Function, stdou
         quiet = "-q" in first.(client.switches) || "--quiet" in first.(client.switches)
         banner = getval(client.switches, "--banner",
                         ifelse(interactiveinput, "yes", "no")) != "no"
+        @static if VERSION >= v"1.11-alpha1"
+            banner = QuoteNode(ifelse(banner, :yes, :no))
+        end
         histfile = getval(client.switches, "--history-file", "yes") != "no"
         Core.eval(mod, quote
                         Core.eval(Base, $(:(have_color = $hascolor)))
