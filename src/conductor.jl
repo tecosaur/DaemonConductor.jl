@@ -1,6 +1,28 @@
-const MAIN_SOCKET =
-    get(ENV, "JULIA_DAEMON_SERVER",
-        BaseDirs.User.runtime(RUNTIME_DIR, "conductor.sock"))
+const SOCKET_NAME = "conductor.sock"
+const MAIN_SOCKET = Ref{String}()
+
+function mainsocket()
+    if isassigned(MAIN_SOCKET)
+        MAIN_SOCKET[]
+    else
+        path = get(
+            ENV, "JULIA_DAEMON_SERVER",
+            BaseDirs.runtime(RUNTIME_DIR, SOCKET_NAME))
+        file = if startswith(path, '/') # Absolute socket file
+            path
+        elseif startswith(path, '~') # User-local socket file
+            expanduser(path)
+        end
+        if !isnothing(file) && ispath(file)
+            if startswith(file, BaseDirs.runtime(RUNTIME_DIR))
+                rm(BaseDirs.runtime(RUNTIME_DIR), recursive=true)
+            else
+                rm(file)
+            end
+        end
+        MAIN_SOCKET[] = something(file, path)
+    end
+end
 
 function start()
     try
@@ -23,42 +45,27 @@ function start()
             RESERVE_WORKER[] = nothing
         end
         @log "Stopped"
-        file = if startswith(MAIN_SOCKET, '/') # Absolute socket file
-            MAIN_SOCKET
-        elseif startswith(MAIN_SOCKET, '~') # User-local socket file
-            expanduser(MAIN_SOCKET)
-        end
-        if !isnothing(file) && ispath(file)
-            if startswith(file, BaseDirs.User.runtime(RUNTIME_DIR))
-                rm(BaseDirs.User.runtime(RUNTIME_DIR), recursive=true)
-            else
-                rm(file)
-            end
-        end
+        mainsocket()
     end
 end
 
 function serveonce()
-    file = if startswith(MAIN_SOCKET, '/') # Absolute socket file
-        MAIN_SOCKET
-    elseif startswith(MAIN_SOCKET, '~') # User-local socket file
-        expanduser(MAIN_SOCKET)
-    end
+    socket = mainsocket()
 
-    server = if !isnothing(file)
-        isdir(dirname(file)) || mkpath(dirname(file))
-        Sockets.listen(file)
-    elseif match(r"^(?:localhost)?:\d+$", MAIN_SOCKET) |> !isnothing # Port only
-        _, port = split(MAIN_SOCKET, ':')
+    server = if startswith(socket, '/')
+        isdir(dirname(socket)) || mkpath(dirname(socket))
+        Sockets.listen(socket)
+    elseif match(r"^(?:localhost)?:\d+$", socket) |> !isnothing # Port only
+        _, port = split(socket, ':')
         Sockets.listen(parse(Int, port))
-    elseif match(r"^\[[0-9a-f:]+\]:\d+$", MAIN_SOCKET) |> !isnothing # IPv6 address
-        addr, port = split(MAIN_SOCKET[2:end], "]:")
+    elseif match(r"^\[[0-9a-f:]+\]:\d+$", socket) |> !isnothing # IPv6 address
+        addr, port = split(socket[2:end], "]:")
         Sockets.listen(parse(IPv6, addr), parse(Int, port))
-    elseif match(r"^\d+\.\d+\.\d+\.\d+:\d+$", MAIN_SOCKET) |> !isnothing # IPv4 address
-        addr, port = split(MAIN_SOCKET, ':')
+    elseif match(r"^\d+\.\d+\.\d+\.\d+:\d+$", socket) |> !isnothing # IPv4 address
+        addr, port = split(socket, ':')
         Sockets.listen(parse(IPv4, addr), parse(Int, port))
     else
-        error("Socket form $(sprint(show, MAIN_SOCKET)) did not match any recognised format.")
+        error("Socket form $(sprint(show, socket)) did not match any recognised format.")
     end
 
     try
@@ -94,8 +101,8 @@ function serveclient(connection::Base.PipeEndpoint)
     function servestring(content)
         # Setup sockets
         rand_id = String(rand('a':'z', 16))
-        stdio_sockfile = BaseDirs.User.runtime(RUNTIME_DIR, string(rand_id, "-stdio", ".sock"))
-        signals_sockfile = BaseDirs.User.runtime(RUNTIME_DIR, string(rand_id, "-signals", ".sock"))
+        stdio_sockfile = BaseDirs.runtime(RUNTIME_DIR, string(rand_id, "-stdio", ".sock"))
+        signals_sockfile = BaseDirs.runtime(RUNTIME_DIR, string(rand_id, "-signals", ".sock"))
         stdio_sock = Sockets.listen(stdio_sockfile)
         signals_sock = Sockets.listen(signals_sockfile)
         # Inform client about them

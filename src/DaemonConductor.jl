@@ -34,7 +34,7 @@ function __init__()
                   1)
 end
 
-@doc """
+BaseDirs.@promise_no_assign @doc """
     DaemonConductor
 
 # Setup
@@ -46,7 +46,7 @@ itself.
 # Configuration
 
 When the daemon starts, it pays attention to the following environmental variables:
-- `JULIA_DAEMON_SERVER` [`$(BaseDirs.User.runtime("julia-daemon", "conductor.sock"))`] \n
+- `JULIA_DAEMON_SERVER` [`$(BaseDirs.runtime("julia-daemon", "conductor.sock"))`] \n
   The socket to connect to.
 - `JULIA_DAEMON_WORKER_MAXCLIENTS` [`$DEFAULT_WORKER_MAXCLIENTS`]\n
   The maximum number of clients a worker may be attached to at once. Set to `0`

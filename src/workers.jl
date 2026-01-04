@@ -22,17 +22,18 @@ struct Worker
     lock::ReentrantLock
 end
 
-const WORKER_ENV = BaseDirs.User.cache(string(
-    "julia-daemon-", replace(string(PACKAGE_VERSION), '.' => '-'), "-worker-env"))
+const WORKER_ENV_DIR = string("julia-daemon-", replace(string(PACKAGE_VERSION), '.' => '-'), "-worker-env")
+const WORKER_ENV = Ref{String}()
 const WORKER_PKGDIR = joinpath(dirname(@__DIR__), "worker")
 
 function ensure_worker_env()
-    if !isdir(WORKER_ENV)
-        mkpath(WORKER_ENV)
+    if !isassigned(WORKER_ENV)
+        WORKER_ENV[] = BaseDirs.cache(WORKER_ENV_DIR)
     end
+    isdir(WORKER_ENV[]) || mkpath(WORKER_ENV[])
     jlcmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
     action = :(Pkg.develop(path=$WORKER_PKGDIR))
-    success(`$jlcmd --startup-file=no --project=$WORKER_ENV -e "using Pkg; $action"`) ||
+    success(`$jlcmd --startup-file=no --project=$(WORKER_ENV[]) -e "using Pkg; $action"`) ||
         error("Failed to set up worker environment")
 end
 
@@ -53,7 +54,10 @@ function worker_command(socketpath::AbstractString)
     cmd = get(ENV, "JULIA_DAEMON_WORKER_EXECUTABLE", joinpath(Sys.BINDIR, "julia"))
     args = split(get(ENV, "JULIA_DAEMON_WORKER_ARGS", "--startup-file=no"))
     action = :(DaemonWorker.runworker($socketpath))
-    Cmd(`$cmd --project=$WORKER_ENV $args --eval "using DaemonWorker; $action"`, env=julia_env())
+    if !isassigned(WORKER_ENV)
+        WORKER_ENV[] = BaseDirs.cache(WORKER_ENV_DIR)
+    end
+    Cmd(`$cmd --project=$(WORKER_ENV[]) $args --eval "using DaemonWorker; $action"`, env=julia_env())
 end
 
 const WORKER_COUNT = Ref(0)
@@ -66,7 +70,7 @@ valid argument for `worker_command`.
 """
 function Worker(project::Union{String, Nothing}=nothing)
     socketpath =
-        BaseDirs.User.runtime(RUNTIME_DIR, string("wsetup-", String(rand('a':'z', 6)), ".sock"))
+        BaseDirs.runtime(RUNTIME_DIR, string("wsetup-", String(rand('a':'z', 6)), ".sock"))
     isdir(dirname(socketpath)) || mkpath(dirname(socketpath))
     server = Sockets.listen(socketpath)
     input = Base.PipeEndpoint()

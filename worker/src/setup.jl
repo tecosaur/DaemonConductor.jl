@@ -193,7 +193,7 @@ function newconnection(oldconn::Base.PipeEndpoint, n::Int=1)
         map(1:n) do _
             sockfile = string("worker-", WORKER_ID[], '-',
                               String(rand('a':'z', 8)), ".sock")
-            path = BaseDirs.User.runtime("julia-daemon", sockfile)
+            path = BaseDirs.runtime("julia-daemon", sockfile)
             server = Sockets.listen(path)
             serialize(oldconn, (:socket, path))
             server
