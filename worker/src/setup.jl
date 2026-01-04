@@ -160,15 +160,18 @@ function runclient(mod::Module, client::NamedTuple; signal_exit::Function, stdou
         interactiveinput = runrepl && client.tty
         hascolor = get(stdout, :color, false)
         quiet = "-q" in first.(client.switches) || "--quiet" in first.(client.switches)
-        banner = getval(client.switches, "--banner",
-                        ifelse(interactiveinput, "yes", "no")) != "no"
-        @static if VERSION >= v"1.11-alpha1"
-            banner = QuoteNode(ifelse(banner, :yes, :no))
-        end
+        banner = Symbol(getval(client.switches, "--banner", ifelse(interactiveinput, "yes", "no")))
         histfile = getval(client.switches, "--history-file", "yes") != "no"
+        replcall = if VERSION < v"1.11"
+            :(Base.run_main_repl($interactiveinput, $quiet, $(banner != :no), $histfile, $hascolor))
+        elseif VERSION < v"1.12"
+            :(Base.run_main_repl($interactiveinput, $quiet, $(QuoteNode(banner)), $histfile, $hascolor))
+        else
+            :(Base.run_main_repl($interactiveinput, $quiet, $(QuoteNode(banner)), $histfile))
+        end
         Core.eval(mod, quote
-                        Core.eval(Base, $(:(have_color = $hascolor)))
-                        Base.run_main_repl($interactiveinput, $quiet, $banner, $histfile, $hascolor)
+                      setglobal!(Base, :have_color, $hascolor)
+                      $replcall
                     end)
     end
     signal_exit(0)
