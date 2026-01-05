@@ -122,6 +122,21 @@ function serveclient(connection::Base.PipeEndpoint)
     elseif "-v" in first.(client.switches) || "--version" in first.(client.switches)
         # REVIEW: Should this get the Julia version from the worker?
         servestring("julia version $VERSION, juliaclient $PACKAGE_VERSION\n")
+    elseif "--reset" in first.(client.switches)
+        project = projectpath(client)
+        nkilled = 0
+        if haskey(WORKER_POOL, project)
+            nkilled = length(WORKER_POOL.workers[project])
+            delete!(WORKER_POOL, project)
+        end
+        @log "Reset: killed $nkilled worker(s) for $project"
+        servestring("Reset: killed $nkilled worker(s) for project\n")
+    elseif "--stop" in first.(client.switches)
+        @log "Stop requested, exiting daemon"
+        pkgdir_path = pkgdir(@__MODULE__)
+        restart_cmd = "julia --project=$(pkgdir_path) -e 'using DaemonConductor; DaemonConductor.start()' &"
+        servestring("Daemon exiting.\nTo restart, run:\n  $restart_cmd\n")
+        exit(0)
     else
         stdio_sock, signals_sock = runclient(client)
         try
