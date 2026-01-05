@@ -1,4 +1,4 @@
-// Written for Zig 0.10.1
+// Written for Zig 0.15
 // Compile with: zig build-exe -target x86_64-linux -fstrip -O ReleaseSmall -fsingle-threaded -fPIE client.zig
 const std = @import("std");
 
@@ -45,31 +45,31 @@ var sockets: SocketSet = undefined;
 // to treat specially.
 fn signals_handler(
     signals: c_int,
-    _: *const std.os.siginfo_t,
+    _: *const std.posix.siginfo_t,
     _: ?*const anyopaque,
-) callconv(.C) void {
+) callconv(.c) void {
     switch (signals) {
-        std.os.SIG.INT => {
+        std.posix.SIG.INT => {
             _ = sockets.stdio.write("\x03") catch {}; },
         else => {} }}
 
 fn register_signal_handler() !void {
-    var mask = std.os.empty_sigset;
-    std.os.linux.sigaddset(&mask, std.os.SIG.INT);
-    // std.os.linux.sigaddset(&mask, std.os.SIG.TERM);
-    var sigact = std.os.Sigaction{
+    var mask = std.mem.zeroes(std.posix.sigset_t);
+    std.posix.sigaddset(&mask, std.posix.SIG.INT);
+    // std.posix.sigaddset(&mask, std.posix.SIG.TERM);
+    var sigact = std.posix.Sigaction{
         .handler = .{ .sigaction = signals_handler },
         .mask = mask,
         .flags = 0,
     };
-    try std.os.sigaction(std.os.SIG.INT, &sigact, null);
-    // try std.os.sigaction(std.os.SIG.TERM, &sigact, null);
+    std.posix.sigaction(std.posix.SIG.INT, &sigact, null);
+    // try std.posix.sigaction(std.posix.SIG.TERM, &sigact, null);
 }
 
 fn get_main_socket(allocator: std.mem.Allocator, env_map: std.process.EnvMap) !std.net.Stream {
     const default_main_socket_path = try std.fmt.allocPrint(
         allocator, "/run/user/{d}/julia-daemon/conductor.sock",
-        .{ std.os.linux.getuid() });
+        .{ std.posix.getuid() });
 
     const main_socket_path = env_map.get("JULIA_DAEMON_SERVER")
         orelse default_main_socket_path;
@@ -77,7 +77,7 @@ fn get_main_socket(allocator: std.mem.Allocator, env_map: std.process.EnvMap) !s
     const main_socket = std.net.connectUnixSocket(main_socket_path) catch |err| switch (err) {
         error.FileNotFound => {
             std.debug.print("Socket file {s} does not exist.\nAre you sure the daemon is running?\n", .{main_socket_path});
-            std.os.exit(1); },
+            std.process.exit(1); },
         else => { return err; }};
 
     // Since we're now connected now, we can actually delete the socket file.
@@ -86,78 +86,90 @@ fn get_main_socket(allocator: std.mem.Allocator, env_map: std.process.EnvMap) !s
     return main_socket;
 }
 
-fn sendinfo(allocator: std.mem.Allocator, main_socket: std.net.Stream,
-            env_map: std.process.EnvMap) !void {
-    var setup_buf = std.io.bufferedWriter(main_socket.writer());
-    const setup_writer = setup_buf.writer();
+fn sendinfo(
+    allocator: std.mem.Allocator,
+    main_socket: std.net.Stream,
+    env_map: std.process.EnvMap,
+) !void {
+    // 1) Build the whole message in memory
+    var msg = std.Io.Writer.Allocating.init(allocator);
+    defer msg.deinit();
+    const w: *std.Io.Writer = &msg.writer;
 
-    try setup_writer.writeAll(argcodes.start);
+    try w.writeAll(argcodes.start);
 
-    // 1: The TTY status
-    const tty_status = if (std.os.isatty(std.os.STDIN_FILENO)) "true" else "false";
-    try setup_writer.print("{s}{s}\n", .{ argcodes.tty, tty_status });
-
-    // 2: The PID
+    const tty_status = if (std.fs.File.stdin().isTty()) "true" else "false";
+    try w.print("{s}{s}\n", .{ argcodes.tty, tty_status });
 
     const pid = std.os.linux.getpid();
-    try setup_writer.print("{s}{d}\n", .{ argcodes.pid, pid });
+    try w.print("{s}{d}\n", .{ argcodes.pid, pid });
 
-    // 3: The current working directory
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.process.getCwd(&cwd_buf);
+    try w.print("{s}{s}\n", .{ argcodes.cwd, cwd });
 
-    var cwd_buf = try allocator.alloc(u8, std.fs.MAX_PATH_BYTES);
-    const cwd = try std.os.getcwd(cwd_buf);
-    try setup_writer.print("{s}{s}\n", .{ argcodes.cwd, cwd });
-    allocator.free(cwd);
-
-    // 4: The environment
-
-    try setup_writer.writeAll(argcodes.env);
-
+    try w.writeAll(argcodes.env);
     var iter = env_map.iterator();
     while (iter.next()) |item| {
-        try setup_writer.print("{s}={s}\n", .{ item.key_ptr.*, item.value_ptr.* }); }
+        try w.print("{s}={s}\n", .{ item.key_ptr.*, item.value_ptr.* });
+    }
 
-    // 5: The command arguments
-
-    try setup_writer.writeAll(argcodes.args);
-
+    try w.writeAll(argcodes.args);
     var args = try std.process.argsWithAllocator(allocator);
     while (args.next()) |arg| {
-        try setup_writer.print("{s}{s}", .{ argcodes.argsep, arg }); }
+        try w.print("{s}{s}", .{ argcodes.argsep, arg });
+    }
     args.deinit();
 
-    try setup_writer.writeAll(argcodes.end);
+    try w.writeAll(argcodes.end);
 
-    try setup_buf.flush(); }
+    const payload = msg.written(); // contiguous slice
+
+    // 2) Send it over the stream API (TCP/unix stream both OK)
+    // Use an unbuffered stream-writer to avoid “forgot to flush” footguns.
+    var sock_writer = main_socket.writer(&.{});
+    try sock_writer.interface.writeAll(payload);
+    try sock_writer.interface.flush();
+}
+
+fn connectUnixOrDie(path: []const u8) !std.net.Stream {
+    return std.net.connectUnixSocket(path) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print(
+                "Socket file {s} does not exist.\nSomething has gone quite wrong...\n",
+                .{path},
+            );
+            std.process.exit(1);
+        },
+        else => return err,
+    };
+}
 
 fn get_communication_sockets(allocator: std.mem.Allocator, main_socket: std.net.Stream) !SocketSet {
-    var reader = main_socket.reader();
-    const stdio_socket_path = try reader.readUntilDelimiterAlloc(
-        allocator, '\n', std.fs.MAX_PATH_BYTES);
-    const signals_socket_path = try reader.readUntilDelimiterAlloc(
-        allocator, '\n', std.fs.MAX_PATH_BYTES);
+    var buf: [2 * std.fs.max_path_bytes + 2]u8 = undefined;
+    var sr = main_socket.reader(&buf);
+    const reader = sr.interface(); // *std.Io.Reader
 
-    // Setup is complete, we can close the socket.
+    const stdio_socket_path = try allocator.dupe(
+        u8,
+        std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r"),
+    );
+    defer allocator.free(stdio_socket_path);
+
+    const signals_socket_path = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+
     main_socket.close();
 
-    // Now we want to connect to our stdio socket, and mirror its stdin/stdout.
-    const stdio_sock = std.net.connectUnixSocket(stdio_socket_path) catch |err| switch (err) {
-        error.FileNotFound => {
-            std.debug.print("Socket file {s} does not exist.\nSomething has gone quite wrong...\n", .{stdio_socket_path});
-            std.os.exit(1); },
-        else => { return err; }};
+    const stdio_sock = try connectUnixOrDie(stdio_socket_path);
+    errdefer stdio_sock.close();
     try std.fs.deleteFileAbsolute(stdio_socket_path);
 
-    const signals_sock = std.net.connectUnixSocket(signals_socket_path) catch |err| switch (err) {
-        error.FileNotFound => {
-            std.debug.print("Socket file {s} does not exist.\nSomething has gone quite wrong...\n", .{signals_socket_path});
-            std.os.exit(1); },
-        else => { return err; }};
+    const signals_sock = try connectUnixOrDie(signals_socket_path);
+    errdefer signals_sock.close();
     try std.fs.deleteFileAbsolute(signals_socket_path);
 
-    return SocketSet{
-        .stdio = stdio_sock,
-        .signals = signals_sock}; }
+    return .{ .stdio = stdio_sock, .signals = signals_sock };
+}
 
 // We could use a ring-buffer here, but since we're dealing
 // but a temp buffer is small enough that we may as well
@@ -180,8 +192,8 @@ fn process_signal_input(siginput: []u8) !i8 {
     if (signals_write_index + siginput.len > signals_buffer.len) {
         return error.Full; }
 
-    std.mem.copy(u8, signals_buffer[signals_write_index..signals_write_index + siginput.len],
-                 siginput);
+    @memcpy(signals_buffer[signals_write_index..signals_write_index + siginput.len],
+            siginput);
     signals_write_index += siginput.len;
 
     var num_endcodes: u8 = 0;
@@ -225,10 +237,10 @@ fn process_signal_input(siginput: []u8) !i8 {
 
     const unprocessed_length = signals_write_index - signals_read_index;
     if (signals_read_index > 0 and unprocessed_length > 0) {
-        std.mem.copy(u8, signals_tempbuffer[0..unprocessed_length],
-                     signals_buffer[signals_read_index..signals_write_index]);
-        std.mem.copy(u8, signals_buffer[0..unprocessed_length],
-                     signals_tempbuffer[0..unprocessed_length]); }
+        @memcpy(signals_tempbuffer[0..unprocessed_length],
+                signals_buffer[signals_read_index..signals_write_index]);
+        @memcpy(signals_buffer[0..unprocessed_length],
+                signals_tempbuffer[0..unprocessed_length]); }
     signals_write_index -= signals_read_index;
     return exitcode; }
 
@@ -247,7 +259,7 @@ fn run_ioring() !void {
     const ring_queue_depth = 4; // (must be 2^n) stdin, stdio in, signals in
     const ring_buffer_size = 1024;
 
-    var ring = try std.os.linux.IO_Uring.init(ring_queue_depth, 0);
+    var ring = try std.os.linux.IoUring.init(ring_queue_depth, 0);
     defer ring.deinit();
 
     var stdout_buf: [ring_buffer_size]u8 = undefined;
@@ -256,16 +268,16 @@ fn run_ioring() !void {
 
     // Set up initial SQE
 
-    _ = try ring.read(@enumToInt(Location.stdout), sockets.stdio.handle, .{ .buffer = stdout_buf[0..] }, 0);
-    _ = try ring.read(@enumToInt(Location.stdin), std.os.STDIN_FILENO, .{ .buffer = stdin_buf[0..] }, 0);
-    _ = try ring.read(@enumToInt(Location.signals), sockets.signals.handle, .{ .buffer = signals_buf[0..] }, 0);
+    _ = try ring.read(@intFromEnum(Location.stdout), sockets.stdio.handle, .{ .buffer = stdout_buf[0..] }, 0);
+    _ = try ring.read(@intFromEnum(Location.stdin), std.posix.STDIN_FILENO, .{ .buffer = stdin_buf[0..] }, 0);
+    _ = try ring.read(@intFromEnum(Location.signals), sockets.signals.handle, .{ .buffer = signals_buf[0..] }, 0);
 
-    const stdout = std.io.getStdOut();
+    const stdout_fd = std.posix.STDOUT_FILENO;
     var exitcode: i8 = -1; // value >= 0 indicates exit
 
     while (true) {
         if (exitcode >= 0 and ring.cq_ready() == 0) {
-            std.os.exit(@intCast(u8, exitcode)); }
+            std.process.exit(@intCast(exitcode)); }
 
         _ = try ring.submit_and_wait(1);
 
@@ -276,31 +288,33 @@ fn run_ioring() !void {
                 std.debug.panic("Oh no, something went wrong within io_uring.\n", .{}); }
 
             switch (cqe.user_data) {
-                @enumToInt(Location.stdout) => {
-                    const len = @intCast(usize, cqe.res);
-                    try stdout.writeAll(stdout_buf[0..len]);
-                    _ = try ring.read(@enumToInt(Location.stdout), sockets.stdio.handle, .{ .buffer = stdout_buf[0..] }, 0); },
-                @enumToInt(Location.stdin) => {
-                    const len = @intCast(usize, cqe.res);
-                    _ = try sockets.stdio.write(stdin_buf[0..len]); // TODO With Zig 0.11 replace with .writeAll
-                    _ = try ring.read(@enumToInt(Location.stdin), std.os.STDIN_FILENO, .{ .buffer = stdin_buf[0..] }, 0); },
-                @enumToInt(Location.signals) => {
-                    const len = @intCast(usize, cqe.res);
+                @intFromEnum(Location.stdout) => {
+                    const len = @as(usize, @intCast(cqe.res));
+                    _ = try std.posix.write(stdout_fd, stdout_buf[0..len]);
+                    _ = try ring.read(@intFromEnum(Location.stdout), sockets.stdio.handle, .{ .buffer = stdout_buf[0..] }, 0); },
+                @intFromEnum(Location.stdin) => {
+                    const len = @as(usize, @intCast(cqe.res));
+                    _ = try sockets.stdio.write(stdin_buf[0..len]);
+                    _ = try ring.read(@intFromEnum(Location.stdin), std.posix.STDIN_FILENO, .{ .buffer = stdin_buf[0..] }, 0); },
+                @intFromEnum(Location.signals) => {
+                    const len = @as(usize, @intCast(cqe.res));
                     exitcode = try process_signal_input(signals_buf[0..len]);
-                    _ = try ring.read(@enumToInt(Location.signals), sockets.signals.handle, .{ .buffer = signals_buf[0..] }, 0); },
+                    _ = try ring.read(@intFromEnum(Location.signals), sockets.signals.handle, .{ .buffer = signals_buf[0..] }, 0); },
                 else => {
                     std.debug.print("\nUnknown CQE ({d})\n", .{ cqe.user_data }); }}}}}
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    var alloc = arena.allocator();
+    const alloc = arena.allocator();
     defer arena.deinit();
 
     // Stage 0: Switch to raw mode to avoid line-buffering stdin.
-    if (std.os.isatty(std.os.STDIN_FILENO)) {
-        var termios = try std.os.tcgetattr(std.os.STDIN_FILENO);
-        termios.lflag &= ~(std.os.linux.ECHO | std.os.linux.ICANON);
-        try std.os.tcsetattr(std.os.STDIN_FILENO, std.os.TCSA.FLUSH, termios); }
+    const stdin = std.fs.File.stdin();
+    if (stdin.isTty()) {
+        var termios = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
+        termios.lflag.ECHO = false;
+        termios.lflag.ICANON = false;
+        try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, termios); }
 
     const env_map = try std.process.getEnvMap(alloc);
 
