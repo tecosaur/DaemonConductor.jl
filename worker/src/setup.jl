@@ -41,7 +41,8 @@ end
 # Client evaluation
 
 function prepare_module(client::NamedTuple)
-    mod = Module(:Main)
+    # mod = Module(:Main)  # Creates fresh module, loses variable persistence
+    mod = Main
     # MainInclude (taken from base/client.jl)
     maininclude = quote
         baremodule MainInclude
@@ -65,6 +66,11 @@ function prepare_module(client::NamedTuple)
     Core.eval(mod, :(cd($client.cwd)))
     if !isempty(client.args)
         Core.eval(mod, :(ARGS = $(client.args)))
+    end
+
+    # Trigger Revise to pick up code changes
+    if isdefined(Main, :Revise)
+        Main.Revise.revise()
     end
     mod
 end

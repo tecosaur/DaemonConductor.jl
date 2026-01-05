@@ -182,7 +182,6 @@ function Base.getindex(pool::WorkerPool, project::AbstractString)
         end
         for worker in pool.workers[project]
             nclients = run(worker, :(length(STATE.clients)))
-            nclients = run(worker, :(length(STATE.clients)))
             if nclients < WORKER_MAXCLIENTS[]
                 return worker
             end

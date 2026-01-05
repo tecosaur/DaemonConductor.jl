@@ -16,6 +16,8 @@ Switches (a '*' marks the default value, if applicable):
  --banner={yes|no|auto*}    Enable or disable startup banner
  --color={yes|no|auto*}     Enable or disable color text
  --history-file={yes*|no}   Load or save history
+ --reset                    Kill workers for the project and start fresh
+ --stop                     Stop the daemon (prints command to restart)
 """
 
 struct Client
