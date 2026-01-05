@@ -11,7 +11,7 @@ const argcodes = .{
     .env = "\u{e800}DaemonClient Environment\u{e800}\n",
     .args = "\u{e800}DaemonClient Arguments\u{e800}\n",
     .argsep = "\u{e800}--seperator--\u{e800}",
-    .end = "\u{e800}DaemonClient End Info\u{e800}\n\n"
+    .end = "\u{e800}DaemonClient End Info\u{e800}"
 };
 
 const sigcodes = .{
@@ -108,11 +108,7 @@ fn sendinfo(
     const cwd = try std.process.getCwd(&cwd_buf);
     try w.print("{s}{s}\n", .{ argcodes.cwd, cwd });
 
-    try w.writeAll(argcodes.env);
-    var iter = env_map.iterator();
-    while (iter.next()) |item| {
-        try w.print("{s}={s}\n", .{ item.key_ptr.*, item.value_ptr.* });
-    }
+    try w.print("{s}{d}\n", .{ argcodes.env, envFingerprint(env_map) });
 
     try w.writeAll(argcodes.args);
     var args = try std.process.argsWithAllocator(allocator);
@@ -132,6 +128,40 @@ fn sendinfo(
     try sock_writer.interface.flush();
 }
 
+fn envFingerprint(env_map: std.process.EnvMap) u64 {
+    var fp: u64 = 0;
+
+    var it = env_map.iterator();
+    while (it.next()) |e| {
+        const k = e.key_ptr.*;
+        const v = e.value_ptr.*;
+
+        // Skip HYPERFINE_ env vars (used for benchmarking)
+        if (std.mem.startsWith(u8, k, "HYPERFINE_")) continue;
+
+        var h = std.hash.Wyhash.init(k.len);
+        h.update(k);
+        h.update(v);
+
+        fp ^= h.final();
+    }
+
+    return fp;
+}
+
+fn sendFullEnv(main_socket: std.net.Stream, env_map: *const std.process.EnvMap) !void {
+    var buf: [4096]u8 = undefined;
+    var sock_writer = main_socket.writer(&buf);
+    const writer = &sock_writer.interface;
+    var count: usize = 0;
+    var it = env_map.iterator();
+    while (it.next()) |e| : (count += 1) {
+        try writer.print("{s}={s}\n", .{ e.key_ptr.*, e.value_ptr.* });
+    }
+    try writer.writeAll("\n");
+    try writer.flush();
+}
+
 fn connectUnixOrDie(path: []const u8) !std.net.Stream {
     return std.net.connectUnixSocket(path) catch |err| switch (err) {
         error.FileNotFound => {
@@ -145,15 +175,23 @@ fn connectUnixOrDie(path: []const u8) !std.net.Stream {
     };
 }
 
-fn get_communication_sockets(allocator: std.mem.Allocator, main_socket: std.net.Stream) !SocketSet {
+fn get_communication_sockets(allocator: std.mem.Allocator, main_socket: std.net.Stream, env_map: *const std.process.EnvMap) !SocketSet {
     var buf: [2 * std.fs.max_path_bytes + 2]u8 = undefined;
     var sr = main_socket.reader(&buf);
     const reader = sr.interface(); // *std.Io.Reader
 
-    const stdio_socket_path = try allocator.dupe(
-        u8,
-        std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r"),
-    );
+    var first_line = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+
+    // Check if conductor needs full environment (indicated by "?")
+    if (first_line.len == 1 and first_line[0] == '?') {
+        // Send full environment
+        try sendFullEnv(main_socket, env_map);
+
+        // Read the actual stdio socket path
+        first_line = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+    }
+
+    const stdio_socket_path = try allocator.dupe(u8, first_line);
     defer allocator.free(stdio_socket_path);
 
     const signals_socket_path = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
@@ -325,7 +363,7 @@ pub fn main() !void {
     // 1. TTY status
     // 2. PID of the client
     // 3. Current directory
-    // 4. Current environment
+    // 4. Current environment (fingerprint only, full env sent on demand)
     // 5. Call arguments
     try sendinfo(alloc, main_socket, env_map);
 
@@ -334,7 +372,9 @@ pub fn main() !void {
     // At this point, the client has sent all the information needed,
     // and we expect to be given a path to a stdin/stdout socket
     // and a socket for signals.
-    sockets = try get_communication_sockets(alloc, main_socket);
+    // If the conductor needs the full environment (cache miss), it will
+    // send "?" first, and we respond with the full environment.
+    sockets = try get_communication_sockets(alloc, main_socket, &env_map);
     // Pass ^C on instead of having it interrupt this client.
     try register_signal_handler();
 

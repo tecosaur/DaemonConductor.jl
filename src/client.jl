@@ -44,10 +44,17 @@ const CLIENT_CODES = (
     argsep = "--seperator--",
     finish = "DaemonClient End Info")
 
+const ENV_CACHE = Dict{UInt64, Vector{Pair{String, String}}}()
+
 """
     readclientinfo(connection)
+
 Using the input stream `connection`, read client information and
 construct a `Client`.
+
+The client sends an environment fingerprint rather than the full environment.
+If the fingerprint is not found in the cache, we request the full environment
+from the client by sending "?" and reading KEY=VALUE pairs until an empty line.
 """
 function readclientinfo(connection::IO)
     tty = if readline(connection) == CLIENT_CODES.tty
@@ -59,15 +66,35 @@ function readclientinfo(connection::IO)
     cwd = if readline(connection) == CLIENT_CODES.cwd
         readline(connection)
     else error("Client info parsing: Expected CWD header") end
-    env = Pair{String, String}[]
-    if readline(connection) == CLIENT_CODES.env
-        while (envline = readline(connection)) != CLIENT_CODES.args
-            key, value = split(envline, '=', limit=2)
-            push!(env, key => value)
-        end
+
+    envprint = if readline(connection) == CLIENT_CODES.env
+        parse(UInt64, readline(connection))
     else error("Client info parsing: Expected Env header") end
+
+    # Read args
+    if readline(connection) != CLIENT_CODES.args
+        error("Client info parsing: Expected Args header")
+    end
     allargs = split(readuntil(connection, CLIENT_CODES.finish),
                     CLIENT_CODES.argsep, keepempty=true)[3:end] .|> String
+
+    # Resolve environment: check cache, request full env if needed
+    env = get(ENV_CACHE, envprint, nothing)
+
+    if isnothing(env)
+        println(connection, "?")
+        flush(connection)
+        env = Pair{String, String}[]
+        envline = readline(connection)
+        while !isempty(envline)
+            key, value = split(envline, '=', limit=2)
+            push!(env, String(key) => String(value))
+            envline = readline(connection)
+        end
+        @log "Queried client environment ($(length(env)) env vars)"
+        ENV_CACHE[envprint] = env
+    end
+
     Client(tty, pid, cwd, env, splitargs!(allargs)...)
 end
 
