@@ -113,12 +113,13 @@ function serveclient(connection::Base.PipeEndpoint)
         close(stdio); close(signals)
         close(stdio_sock); close(signals_sock)
     end
-    if "-h" in first.(client.switches) || "--help" in first.(client.switches)
+    switchnames = map(first, client.switches)
+    if "-h" in switchnames || "--help" in switchnames
         servestring(CLIENT_HELP)
-    elseif "-v" in first.(client.switches) || "--version" in first.(client.switches)
+    elseif "-v" in switchnames || "--version" in switchnames
         # REVIEW: Should this get the Julia version from the worker?
         servestring("julia version $VERSION, juliaclient $PACKAGE_VERSION\n")
-    elseif "--restart" in first.(client.switches)
+    elseif "--restart" in switchnames
         project = projectpath(client)
         nkilled = 0
         if haskey(WORKER_POOL, project)
