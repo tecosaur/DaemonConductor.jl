@@ -220,14 +220,20 @@ dictionary with project paths as the keys, and workers as the values.
 """
 const WORKER_POOL = WorkerPool(Dict{String, Worker}())
 
+# Reusable buffer for serialization - writing all content in one go is faster
+# than incremental writes from serialize() directly to the socket
+const SERIALIZE_BUFFER = IOBuffer()
+
 """
     runclient(worker::Worker, client::Client)
 Run `client` in `worker`. Returns a socket path for the client to connect to.
 """
 function runclient(worker::Worker, client::Client)
     local sig1, sig2, stdio, signals
+    truncate(SERIALIZE_BUFFER, 0)
+    serialize(SERIALIZE_BUFFER, (:client, convert(NamedTuple, client)))
     lock(worker) do
-        serialize(worker.connection, (:client, convert(NamedTuple, client)))
+        write(worker.connection, seekstart(SERIALIZE_BUFFER))
         sig1, stdio = deserialize(worker.connection)
         sig2, signals = deserialize(worker.connection)
     end

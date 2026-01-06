@@ -2,16 +2,16 @@
 // Compile with: zig build-exe -target x86_64-linux -fstrip -O ReleaseSmall -fsingle-threaded -fPIE client.zig
 const std = @import("std");
 
-const argcodes = .{
-    // U+E800 is a private use char used for the Julia logo in JuliaMono.
-    .start = "\u{e800}DaemonClient Initialisation\u{e800}\n",
-    .tty = "\u{e800}DaemonClient is a TTY\u{e800}\n",
-    .pid = "\u{e800}DaemonClient PID\u{e800}\n",
-    .cwd = "\u{e800}DaemonClient Current Working Directory\u{e800}\n",
-    .env = "\u{e800}DaemonClient Environment\u{e800}\n",
-    .args = "\u{e800}DaemonClient Arguments\u{e800}\n",
-    .argsep = "\u{e800}--seperator--\u{e800}",
-    .end = "\u{e800}DaemonClient End Info\u{e800}"
+// Binary protocol constants
+const Protocol = struct {
+    const magic: u32 = 0x4A444301; // "JDC\x01" little-endian
+    const version: u8 = 1;
+    const env_request: u8 = 0x3F; // '?' - server requests full environment
+
+    const Flags = packed struct(u8) {
+        tty: bool,
+        _reserved: u7 = 0,
+    };
 };
 
 const sigcodes = .{
@@ -91,41 +91,52 @@ fn sendinfo(
     main_socket: std.net.Stream,
     env_map: std.process.EnvMap,
 ) !void {
-    // 1) Build the whole message in memory
+    // Build the binary message in memory using Zig 0.15's Io.Writer.Allocating
     var msg = std.Io.Writer.Allocating.init(allocator);
     defer msg.deinit();
     const w: *std.Io.Writer = &msg.writer;
 
-    try w.writeAll(argcodes.start);
+    // Header (8 bytes)
+    try w.writeInt(u32, Protocol.magic, .little);
+    try w.writeStruct(Protocol.Flags{ .tty = std.fs.File.stdin().isTty() }, .little);
+    try w.writeAll(&[_]u8{ 0, 0, 0 }); // reserved bytes
 
-    const tty_status = if (std.fs.File.stdin().isTty()) "true" else "false";
-    try w.print("{s}{s}\n", .{ argcodes.tty, tty_status });
+    // PID (4 bytes)
+    const pid: u32 = @intCast(std.os.linux.getpid());
+    try w.writeInt(u32, pid, .little);
 
-    const pid = std.os.linux.getpid();
-    try w.print("{s}{d}\n", .{ argcodes.pid, pid });
-
+    // CWD (2 byte length + data)
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&cwd_buf);
-    try w.print("{s}{s}\n", .{ argcodes.cwd, cwd });
+    try w.writeInt(u16, @intCast(cwd.len), .little);
+    try w.writeAll(cwd);
 
-    try w.print("{s}{d}\n", .{ argcodes.env, envFingerprint(env_map) });
+    // Environment fingerprint (8 bytes)
+    try w.writeInt(u64, envFingerprint(env_map), .little);
 
-    try w.writeAll(argcodes.args);
+    // Args (2 byte count, then each arg: 2 byte length + data)
     var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    // First pass: count args
+    var arg_count: u16 = 0;
+    while (args.next()) |_| {
+        arg_count += 1;
+    }
+
+    // Write arg count
+    try w.writeInt(u16, arg_count, .little);
+
+    // Second pass: write args
+    args = try std.process.argsWithAllocator(allocator);
     while (args.next()) |arg| {
-        try w.print("{s}{s}", .{ argcodes.argsep, arg });
+        try w.writeInt(u16, @intCast(arg.len), .little);
+        try w.writeAll(arg);
     }
     args.deinit();
 
-    try w.writeAll(argcodes.end);
-
-    const payload = msg.written(); // contiguous slice
-
-    // 2) Send it over the stream API (TCP/unix stream both OK)
-    // Use an unbuffered stream-writer to avoid “forgot to flush” footguns.
-    var sock_writer = main_socket.writer(&.{});
-    try sock_writer.interface.writeAll(payload);
-    try sock_writer.interface.flush();
+    // Send everything at once
+    _ = try main_socket.writeAll(msg.written());
 }
 
 fn envFingerprint(env_map: std.process.EnvMap) u64 {
@@ -149,17 +160,40 @@ fn envFingerprint(env_map: std.process.EnvMap) u64 {
     return fp;
 }
 
-fn sendFullEnv(main_socket: std.net.Stream, env_map: *const std.process.EnvMap) !void {
-    var buf: [4096]u8 = undefined;
-    var sock_writer = main_socket.writer(&buf);
-    const writer = &sock_writer.interface;
-    var count: usize = 0;
+fn sendFullEnv(allocator: std.mem.Allocator, main_socket: std.net.Stream, env_map: *const std.process.EnvMap) !void {
+    // Build binary environment message using Zig 0.15's Io.Writer.Allocating
+    var msg = std.Io.Writer.Allocating.init(allocator);
+    defer msg.deinit();
+    const w: *std.Io.Writer = &msg.writer;
+
+    // Count env vars (excluding HYPERFINE_)
+    var count: u16 = 0;
     var it = env_map.iterator();
-    while (it.next()) |e| : (count += 1) {
-        try writer.print("{s}={s}\n", .{ e.key_ptr.*, e.value_ptr.* });
+    while (it.next()) |e| {
+        if (!std.mem.startsWith(u8, e.key_ptr.*, "HYPERFINE_")) {
+            count += 1;
+        }
     }
-    try writer.writeAll("\n");
-    try writer.flush();
+
+    // Write count
+    try w.writeInt(u16, count, .little);
+
+    // Write each key-value pair with separate lengths
+    it = env_map.iterator();
+    while (it.next()) |e| {
+        const k = e.key_ptr.*;
+        const v = e.value_ptr.*;
+
+        if (std.mem.startsWith(u8, k, "HYPERFINE_")) continue;
+
+        // Write key length, then key, then value length, then value
+        try w.writeInt(u16, @intCast(k.len), .little);
+        try w.writeAll(k);
+        try w.writeInt(u16, @intCast(v.len), .little);
+        try w.writeAll(v);
+    }
+
+    _ = try main_socket.writeAll(msg.written());
 }
 
 fn connectUnixOrDie(path: []const u8) !std.net.Stream {
@@ -176,25 +210,36 @@ fn connectUnixOrDie(path: []const u8) !std.net.Stream {
 }
 
 fn get_communication_sockets(allocator: std.mem.Allocator, main_socket: std.net.Stream, env_map: *const std.process.EnvMap) !SocketSet {
-    var buf: [2 * std.fs.max_path_bytes + 2]u8 = undefined;
+    var buf: [2 * std.fs.max_path_bytes + 4]u8 = undefined;
     var sr = main_socket.reader(&buf);
-    const reader = sr.interface(); // *std.Io.Reader
+    const reader = sr.interface();
 
-    var first_line = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+    // Read first byte to check if it's an env request
+    const first_byte = try reader.takeByte();
 
-    // Check if conductor needs full environment (indicated by "?")
-    if (first_line.len == 1 and first_line[0] == '?') {
-        // Send full environment
-        try sendFullEnv(main_socket, env_map);
+    var stdio_path_len: u16 = undefined;
+    if (first_byte == Protocol.env_request) {
+        // Server requests full environment
+        try sendFullEnv(allocator, main_socket, env_map);
 
-        // Read the actual stdio socket path
-        first_line = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+        // Now read the actual stdio socket path length
+        stdio_path_len = try reader.takeInt(u16, .little);
+    } else {
+        // First byte is part of the length - read second byte
+        const len_byte2 = try reader.takeByte();
+        stdio_path_len = std.mem.readInt(u16, &[2]u8{ first_byte, len_byte2 }, .little);
     }
 
-    const stdio_socket_path = try allocator.dupe(u8, first_line);
+    // Read stdio socket path
+    const stdio_socket_path = try allocator.alloc(u8, stdio_path_len);
     defer allocator.free(stdio_socket_path);
+    try reader.readSliceAll(stdio_socket_path);
 
-    const signals_socket_path = std.mem.trimRight(u8, try reader.takeDelimiterExclusive('\n'), "\r");
+    // Read signals socket path (length-prefixed)
+    const signals_path_len = try reader.takeInt(u16, .little);
+    const signals_socket_path = try allocator.alloc(u8, signals_path_len);
+    defer allocator.free(signals_socket_path);
+    try reader.readSliceAll(signals_socket_path);
 
     main_socket.close();
 
@@ -359,25 +404,20 @@ pub fn main() !void {
     // Stage 1: Connect to the main socket
     const main_socket = try get_main_socket(alloc, env_map);
 
-    // Stage 2: Communicate the relevant information, namely the:
-    // 1. TTY status
-    // 2. PID of the client
-    // 3. Current directory
-    // 4. Current environment (fingerprint only, full env sent on demand)
-    // 5. Call arguments
+    // Stage 2: Send client info using binary protocol
+    // Contains: flags (TTY), PID, CWD, env fingerprint, args
     try sendinfo(alloc, main_socket, env_map);
 
     // Stage 3: Switching sockets
-
-    // At this point, the client has sent all the information needed,
-    // and we expect to be given a path to a stdin/stdout socket
-    // and a socket for signals.
-    // If the conductor needs the full environment (cache miss), it will
-    // send "?" first, and we respond with the full environment.
+    // Server responds with socket paths (length-prefixed).
+    // If server needs full environment (cache miss), it sends '?' first,
+    // and we respond with full environment before receiving socket paths.
     sockets = try get_communication_sockets(alloc, main_socket, &env_map);
+
     // Pass ^C on instead of having it interrupt this client.
     try register_signal_handler();
 
     // Stage 4: Running the client over io_uring
     // TODO (someone else?) write cross-platform fallbacks
-    try run_ioring(); }
+    try run_ioring();
+}

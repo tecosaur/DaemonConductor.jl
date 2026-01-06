@@ -71,9 +71,6 @@ function serveonce()
     try
         # This blocks until the socket is connected to.
         conn = accept(server)
-        if readline(conn) != CLIENT_CODES.start
-            error("Malformed connection")
-        end
 
         # Since the client deletes the socket file immediately after
         # connecting to it, we can spawn a task to handle it asyncronously
@@ -105,9 +102,8 @@ function serveclient(connection::Base.PipeEndpoint)
         signals_sockfile = BaseDirs.runtime(RUNTIME_DIR, string(rand_id, "-signals", ".sock"))
         stdio_sock = Sockets.listen(stdio_sockfile)
         signals_sock = Sockets.listen(signals_sockfile)
-        # Inform client about them
-        println(connection, stdio_sockfile)
-        println(connection, signals_sockfile)
+        # Inform client about them using binary protocol
+        send_socket_paths(connection, stdio_sockfile, signals_sockfile)
         # Connect to the client
         stdio = accept(stdio_sock)
         signals = accept(signals_sock)
@@ -125,8 +121,7 @@ function serveclient(connection::Base.PipeEndpoint)
     else
         stdio_sock, signals_sock = runclient(client)
         try
-            println(connection, stdio_sock)
-            println(connection, signals_sock)
+            send_socket_paths(connection, stdio_sock, signals_sock)
         catch err
             if err isa Base.IOError
                 @warn "Client disconnected during setup"

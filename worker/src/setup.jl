@@ -190,14 +190,15 @@ end
 
 function newconnection(oldconn::Base.PipeEndpoint, n::Int=1)
     try
-        map(1:n) do _
+        servers = Sockets.PipeServer[]
+        for i in 1:n
             sockfile = string("worker-", WORKER_ID[], '-',
                               String(rand('a':'z', 8)), ".sock")
             path = BaseDirs.runtime("julia-daemon", sockfile)
-            server = Sockets.listen(path)
+            push!(servers, Sockets.listen(path))
             serialize(oldconn, (:socket, path))
-            server
-        end .|> accept
+        end
+        map(accept, servers)
     catch err
         if err isa InterruptException # Can occur when client disconnects partway through
             @info "Interrupt during connection setup"
