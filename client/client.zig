@@ -365,7 +365,7 @@ fn run_ioring() !void {
         while (ring.cq_ready() > 0) {
             const cqe = try ring.copy_cqe();
 
-            if (cqe.res < 0) {
+            if (cqe.res < 0 and cqe.user_data != @intFromEnum(Location.stdin)) {
                 std.debug.panic("Oh no, something went wrong within io_uring.\n", .{}); }
 
             switch (cqe.user_data) {
@@ -374,6 +374,8 @@ fn run_ioring() !void {
                     _ = try std.posix.write(stdout_fd, stdout_buf[0..len]);
                     _ = try ring.read(@intFromEnum(Location.stdout), sockets.stdio.handle, .{ .buffer = stdout_buf[0..] }, 0); },
                 @intFromEnum(Location.stdin) => {
+                    // Handle stdin EOF/error (e.g., /dev/null from nohup) by not resubmitting
+                    if (cqe.res <= 0) continue;
                     const len = @as(usize, @intCast(cqe.res));
                     _ = try sockets.stdio.write(stdin_buf[0..len]);
                     _ = try ring.read(@intFromEnum(Location.stdin), std.posix.STDIN_FILENO, .{ .buffer = stdin_buf[0..] }, 0); },
