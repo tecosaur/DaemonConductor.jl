@@ -41,8 +41,11 @@ end
 # Client evaluation
 
 function prepare_module(client::NamedTuple)
-    # mod = Module(:Main)  # Creates fresh module, loses variable persistence
-    mod = Main
+    mod = if parse(Bool, get(ENV, "JULIA_DAEMON_FRESH", "false"))
+        Module(:Main)  # Fresh module each call, clears previous vars
+    else
+        Main  # REPL-like, persists vars between calls
+    end
     # MainInclude (taken from base/client.jl)
     maininclude = quote
         baremodule MainInclude
@@ -69,7 +72,7 @@ function prepare_module(client::NamedTuple)
     end
 
     # Trigger Revise to pick up code changes
-    if isdefined(Main, :Revise)
+    if parse(Bool, get(ENV, "JULIA_DAEMON_AUTOREVISE", "true")) && isdefined(Main, :Revise)
         Main.Revise.revise()
     end
     mod
