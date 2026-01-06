@@ -41,7 +41,11 @@ end
 # Client evaluation
 
 function prepare_module(client::NamedTuple)
-    mod = Module(:Main)
+    mod = if getval(client.switches, "--session", "no") ∈ ("yes", "true", "1", "")
+        Main
+    else
+        Module(:Main)
+    end
     # MainInclude (taken from base/client.jl)
     maininclude = quote
         baremodule MainInclude
