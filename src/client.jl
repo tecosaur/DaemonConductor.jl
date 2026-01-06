@@ -19,6 +19,7 @@ Switches (a '*' marks the default value, if applicable):
 
 Client specific switches:
 
+ --revise[=yes|no*]         Enable or disable Revise.jl integration
  --restart                  Kill workers for the project and exit
 """
 

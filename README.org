@@ -46,6 +46,8 @@ When the daemon starts, it pays attention to the following environmental variabl
 + =JULIA_DAEMON_WORKER_TTL= (default: =7200=, 2h), the number of seconds a worker
   should be kept alive for after the last client disconnects from it. This
   variable can be updated within the worker itself.
++ =JULIA_DAEMON_REVISE= (default: =no=), whether revise should be automatically
+  enabled in client sessions. Can also be set with =--revise=.
 
 Similarly, the client pays attention to =JULIA_DAEMON_SERVER= to make sure it
 connects to the right socket.
