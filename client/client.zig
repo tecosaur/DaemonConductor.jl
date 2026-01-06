@@ -5,9 +5,7 @@ const std = @import("std");
 // Binary protocol constants
 const Protocol = struct {
     const magic: u32 = 0x4A444301; // "JDC\x01" little-endian
-    const version: u8 = 1;
     const env_request: u8 = 0x3F; // '?' - server requests full environment
-
     const Flags = packed struct(u8) {
         tty: bool,
         _reserved: u7 = 0,

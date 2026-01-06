@@ -34,12 +34,13 @@ function Base.convert(::Type{NamedTuple}, client::Client)
 end
 
 # Binary protocol constants
-const PROTOCOL_MAGIC = 0x4A444301  # "JDC\x01" little-endian
 const PROTOCOL_VERSION = 0x01
-const ENV_REQUEST = 0x3F  # '?' - request full environment from client
+const PROTOCOL_MAGIC = 0x4A444300 | PROTOCOL_VERSION  # "JDC." little-endian
+const ENV_REQUEST = UInt8('?')
 
-# Environment fingerprint caching
-const ENV_CACHE = Dict{UInt64, Vector{Pair{String, String}}}()
+# Environment envprint caching: bounded list with LRU eviction
+const ENV_CACHE_MAX = 5
+const ENV_CACHE = Vector{Pair{UInt64, Vector{Pair{String, String}}}}()
 const ENV_CACHE_LOCK = ReentrantLock()
 
 """
@@ -55,59 +56,43 @@ Binary Protocol Format:
     [3 bytes] Reserved
 
   Body:
-    [4 bytes] PID (u32 LE)
-    [2 bytes] CWD length (u16 LE)
+    [4 bytes] PID (u32)
+    [2 bytes] CWD length (u16)
     [N bytes] CWD string
-    [8 bytes] Env fingerprint (u64 LE)
-    [2 bytes] Arg count (u16 LE)
+    [8 bytes] Env fingerprint (u64)
+    [2 bytes] Arg count (u16)
     For each arg:
-      [2 bytes] Arg length (u16 LE)
+      [2 bytes] Arg length (u16)
       [N bytes] Arg string
 """
 function readclientinfo(connection::IO)
-    # Read and validate magic
     magic = read(connection, UInt32)
     if magic != PROTOCOL_MAGIC
         error("Invalid protocol magic: expected $(repr(PROTOCOL_MAGIC)), got $(repr(magic))")
     end
-
-    # Read flags
     flags = read(connection, UInt8)
     tty = (flags & 0x01) != 0
-
-    # Skip reserved bytes
     read(connection, 3)
-
-    # Read PID
     pid = Int(read(connection, UInt32))
-
-    # Read CWD (length-prefixed)
     cwd_len = read(connection, UInt16)
     cwd = String(read(connection, cwd_len))
-
-    # Read environment fingerprint
-    fingerprint = read(connection, UInt64)
-
-    # Read args (count, then length-prefixed strings)
+    envprint = read(connection, UInt64)
     arg_count = read(connection, UInt16)
     allargs = Vector{String}(undef, arg_count)
     for i in 1:arg_count
         arg_len = read(connection, UInt16)
         allargs[i] = String(read(connection, arg_len))
     end
-
-    # Resolve environment: check cache, request full env if needed
-    env = lock(ENV_CACHE_LOCK) do
-        get(ENV_CACHE, fingerprint, nothing)
+    env = nothing
+    for (eprint, envvars) in ENV_CACHE
+        if eprint == envprint
+            env = envvars
+            break
+        end
     end
-
     if isnothing(env)
-        # Cache miss - request full environment from client
         write(connection, ENV_REQUEST)
         flush(connection)
-
-        # Read binary environment response
-        # Format: [2 bytes count][for each: 2 bytes key_len, key, 2 bytes val_len, val]
         env_count = read(connection, UInt16)
         env = Vector{Pair{String, String}}(undef, env_count)
         for i in 1:env_count
@@ -117,13 +102,9 @@ function readclientinfo(connection::IO)
             val = String(read(connection, val_len))
             env[i] = key => val
         end
-
-        # Cache the environment
-        lock(ENV_CACHE_LOCK) do
-            ENV_CACHE[fingerprint] = env
-        end
+        length(ENV_CACHE) == ENV_CACHE_MAX && popfirst!(ENV_CACHE)
+        push!(ENV_CACHE, envprint => env)
     end
-
     Client(tty, pid, cwd, env, splitargs!(allargs)...)
 end
 
