@@ -24,35 +24,14 @@ function mainsocket()
     end
 end
 
-function start()
-    try
-        @log "Preparing worker environment"
-        ensure_worker_env()
-        @log "Running"
-        @async create_reserve_worker()
-        while true
-            serveonce()
-        end
-    finally # Cleanup
-        @log "Killing $(length(WORKER_POOL)) workers"
-        for (key, _) in WORKER_POOL
-            # These /need/ to be deleted and killed to avoid
-            # potential pipe issues should `start()` be reinvoked.
-            delete!(WORKER_POOL, key)
-        end
-        if !isnothing(RESERVE_WORKER[])
-            kill(RESERVE_WORKER[])
-            RESERVE_WORKER[] = nothing
-        end
-        @log "Stopped"
-        mainsocket()
-    end
-end
+"""
+    create_server(socket)
 
-function serveonce()
-    socket = mainsocket()
-
-    server = if startswith(socket, '/')
+Create a server socket based on the socket path/address format.
+Returns a `PipeServer` for Unix sockets or `TCPServer` for network addresses.
+"""
+function create_server(socket::AbstractString)
+    if startswith(socket, '/')
         isdir(dirname(socket)) || mkpath(dirname(socket))
         Sockets.listen(socket)
     elseif match(r"^(?:localhost)?:\d+$", socket) |> !isnothing # Port only
@@ -67,18 +46,45 @@ function serveonce()
     else
         error("Socket form $(sprint(show, socket)) did not match any recognised format.")
     end
+end
+
+function start()
+    socket = mainsocket()
+    server = create_server(socket)
 
     try
-        # This blocks until the socket is connected to.
-        conn = accept(server)
+        @log "Preparing worker environment"
+        ensure_worker_env()
+        @log "Running on $socket"
+        @async create_reserve_worker()
+        while true
+            serveonce(server)
+        end
+    finally # Cleanup
+        @log "Killing $(length(WORKER_POOL)) workers"
+        for (key, _) in WORKER_POOL
+            # These /need/ to be deleted and killed to avoid
+            # potential pipe issues should `start()` be reinvoked.
+            delete!(WORKER_POOL, key)
+        end
+        if !isnothing(RESERVE_WORKER[])
+            kill(RESERVE_WORKER[])
+            RESERVE_WORKER[] = nothing
+        end
+        # Clean up the server socket
+        close(server)
+        socket_path = mainsocket()
+        if startswith(socket_path, '/') && ispath(socket_path)
+            rm(socket_path)
+        end
+        @log "Stopped"
+    end
+end
 
-        # Since the client deletes the socket file immediately after
-        # connecting to it, we can spawn a task to handle it asyncronously
-        # and immedately re-create the socket file.
-        # However, changing this to `@spawn serveclient($conn)` seems to
-        # add ~10ms to the time, which is a decently large factor with a
-        # "hello world" type script, and sometimes the main socket file
-        # disapears.
+function serveonce(server)
+    try
+        # This blocks until a client connects
+        conn = accept(server)
         serveclient(conn)
     catch err
         if err isa Base.IOError

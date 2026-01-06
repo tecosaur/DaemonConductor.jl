@@ -76,10 +76,10 @@ fn get_main_socket(allocator: std.mem.Allocator, env_map: std.process.EnvMap) !s
         error.FileNotFound => {
             std.debug.print("Socket file {s} does not exist.\nAre you sure the daemon is running?\n\nTo start the daemon (recommended):\n  systemctl --user start julia-daemon\n\nOr manually:\n  julia --project=<path> -e 'using DaemonConductor; DaemonConductor.start()'\n", .{main_socket_path});
             std.process.exit(127); },
+        error.ConnectionRefused => {
+            std.debug.print("Connection refused to {s}.\nThe daemon may have crashed - try restarting it.\n", .{main_socket_path});
+            std.process.exit(127); },
         else => { return err; }};
-
-    // Since we're now connected now, we can actually delete the socket file.
-    try std.fs.deleteFileAbsolute(main_socket_path);
 
     return main_socket;
 }
