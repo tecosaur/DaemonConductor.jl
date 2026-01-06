@@ -66,6 +66,10 @@ function prepare_module(client::NamedTuple)
     if !isempty(client.args)
         Core.eval(mod, :(ARGS = $(client.args)))
     end
+    # Trigger Revise
+    if isdefined(Main, :Revise)
+        Main.Revise.revise()
+    end
     mod
 end
 
