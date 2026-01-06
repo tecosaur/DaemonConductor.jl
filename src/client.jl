@@ -101,7 +101,7 @@ function splitargs!(args::Vector{String})
                 switch, value = split(arg, '=', limit=2)
                 push!(switches, (switch, value))
             else
-                push!(switches, (arg, if isempty(args) "" else popfirst!(arg) end))
+                push!(switches, (arg, if isempty(args) "" else popfirst!(args) end))
             end
         elseif startswith(arg, "-") && length(arg) > 1
             thearg = get(SWITCH_SHORT_MAPPING, arg[1:2], arg[1:2])
